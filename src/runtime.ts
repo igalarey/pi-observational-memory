@@ -10,8 +10,8 @@ export class Runtime {
 	config: Config = { ...DEFAULTS };
 	configLoaded = false;
 
-	/** The per-session on/off gate (default OFF). Outermost guard in every handler. */
-	enabled = false;
+	/** The per-session on/off gate (default ON). Outermost guard in every handler. */
+	enabled = true;
 
 	/**
 	 * Absolute `.memory/<sessionId>/` root for this session's durable + transient memory. Set

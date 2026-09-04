@@ -4,16 +4,37 @@ Tiered, subprocess-backed memory for pi.
 
 Parallel **observers** distill raw conversation chunks into atomic observations committed to the master's branch-local **ledger** (so memory stays correct under `/tree`); a deterministic, model-free **compaction** renders that buffer verbatim into the compaction block. A **consolidator** promotes the oldest observations into durable `.memory/<sessionId>/` topic files, bounding the buffer and giving each session its own durable, `grep`-able long-term memory (a fork seeds its memory from its parent).
 
-## On/off gate (default OFF)
+## Installation
 
-The extension ships in the global extensions folder during development, so it is **gated off
-per session** and is completely invisible until you turn it on.
+A working `pi` CLI and Node.js/npm are required. **tmux is not required.** Workers run as
+headless child processes with no attached TTY; prompts are streamed through stdin instead of
+the size-limited command line. The launcher reuses the active pi entry point and has a
+cross-platform PATH fallback for npm shims, so it works from ordinary terminals and shells on
+Windows, macOS, and Linux.
+
+From this repository:
+
+```bash
+npm install
+pi install .
+```
+
+Restart pi (or run `/reload`); observational memory is enabled automatically. Confirm the
+package with `pi list` and inspect runtime state with `/om:status`. The package is installed by
+local path, so keep this checkout in place. Configure worker models below if the defaults are
+not authenticated in your pi installation.
+
+## On/off gate (default ON)
+
+The extension is **enabled automatically per session**. You can explicitly disable it when a
+session should run without observational memory.
 
 - `/om` — toggle for this session
 - `/om on` / `/om off` — set explicitly
 
-State persists per session in the ledger (`om.enabled`) and survives resume. When off, every
-trigger, hook, widget, and subprocess returns immediately.
+Explicit state persists per session in the ledger (`om.enabled`) and survives resume. Existing
+sessions explicitly set to off remain off. When off, every trigger, hook, widget, and
+subprocess returns immediately.
 
 ## How it works
 

@@ -5,9 +5,8 @@
  * the ledger (observations) or files (long-term, Phase B), renders compaction, and drives the
  * TUI. Event-driven only — no daemon.
  *
- * Ships in the global extensions folder during development, so it is gated OFF by default per
- * session (A2a). When the gate is off, every handler returns at its first line and the
- * extension is completely invisible.
+ * Enabled by default per session (A2a). When explicitly gated off, every handler returns at
+ * its first line and the extension is completely invisible.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerCompactCommand } from "./commands/compact.js";
@@ -21,14 +20,14 @@ import { OM_ENABLED, type Entry } from "./ledger/index.js";
 import { ensureSessionMemory } from "./memory/session.js";
 import { Runtime } from "./runtime.js";
 
-function readGateFromLedger(branch: Entry[]): boolean {
+export function readGateFromLedger(branch: Entry[]): boolean {
 	for (let i = branch.length - 1; i >= 0; i--) {
 		const entry = branch[i];
 		if (entry.type === "custom" && entry.customType === OM_ENABLED) {
-			return (entry.data as { enabled?: boolean } | undefined)?.enabled ?? false;
+			return (entry.data as { enabled?: boolean } | undefined)?.enabled ?? true;
 		}
 	}
-	return false;
+	return true;
 }
 
 export default function observationalMemory(pi: ExtensionAPI): void {

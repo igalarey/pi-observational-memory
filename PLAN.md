@@ -18,7 +18,7 @@ Priorities: **performance > speed >= cost**. Cost is the least important factor.
 | L4 | **Extension structure** | **One shared agent extension, env-parameterized by worker type** (`OM_WORKER=observer\|consolidator`), mirroring yt-edit's `FINALIZE_MODE` switch. Plus a separate **master-side orchestrator** extension. |
 | L5 | **Timestamp-id** | **Orchestrator-assigned**, anchored to the chunk's source-entry times, with a deterministic disambiguator suffix. The observer emits minute-resolution event times (OM-proven); the orchestrator derives the precise unique id at commit. Avoids the LLM copy-fidelity risk (design risk 7). |
 | L6 | **Dev default models** | **Strong model everywhere** for bring-up: `anthropic/claude-sonnet-4-6`, `thinking: low` for observers, `thinking: medium` for the consolidator. Fully overridable in config; tune the cheap-observer split later. |
-| L7 | **Per-session on/off gate** | A simple **default-OFF** master switch (`/om`, `/om on/off`), persisted per-session in the ledger. When off the extension is completely inert/invisible. Needed because it ships in the global extensions folder during development. See A2a. |
+| L7 | **Per-session on/off gate** | A simple **default-ON** master switch (`/om`, `/om on/off`), persisted per-session in the ledger. When explicitly turned off the extension is completely inert/invisible. See A2a. |
 
 ### Phasing consequence to keep in mind (stated explicitly)
 
@@ -190,13 +190,12 @@ Goal: a working observer → ledger → injection → compaction loop that is co
   clocks, last-error, status controller. Event-driven only — **no daemon/timer** (per design +
   extension rules).
 
-### A2a. Per-session on/off gate (default OFF) — simple, like `memory.ts`
-- **Why:** the extension lives in the global `~/.pi/agent/extensions/` folder during
-  development, so it would otherwise attach to *every* pi session. The gate keeps it inert
-  unless explicitly enabled in a session.
+### A2a. Per-session on/off gate (default ON) — simple, like `memory.ts`
+- **Why:** observational memory should work automatically in every pi session while retaining
+  an explicit per-session escape hatch.
 - **State:** persisted per-session via `pi.appendEntry("om.enabled", { enabled })`. On
   `session_start`, scan the branch backwards for the latest `om.enabled` entry; default
-  `false` if none. Survives restarts/resume within that session lineage.
+  `true` if none. Survives restarts/resume within that session lineage.
 - **Command:** `/om` toggles; `/om on` / `/om off` set explicitly. On change: append the state
   entry, attach/detach TUI, `ctx.ui.notify("om enabled/disabled")`.
 - **Gate semantics:** when `enabled === false` the extension is **completely invisible and
@@ -204,7 +203,7 @@ Goal: a working observer → ledger → injection → compaction loop that is co
   the `session_before_compact` hook, all TUI, and all worker spawning return immediately at the
   top. No footer, no widgets, no ledger writes, no subprocesses. A single `if (!runtime.enabled) return;`
   is the first line of every handler (mirrors OM's `passive` short-circuit, but here it is the
-  master switch and defaults off).
+  master switch and defaults on).
 - Distinct from config `passive`: `passive` is a power-user setting; the gate is the
   build-time master switch and is the outermost guard.
 
@@ -487,7 +486,7 @@ Namespace `observational-memory` under `~/.pi/agent/settings.json` and project
 1. Scaffold package + tsconfig + vitest.
 2. Vendor & trim ledger/tokens/ids/serialize/debug-log; port + prune tests.
 3. Orchestrator skeleton + config + runtime + TUI status controller (footer).
-3a. Per-session on/off gate (default OFF): `om.enabled` state, `/om` `/om on` `/om off`,
+3a. Per-session on/off gate (default ON): `om.enabled` state, `/om` `/om on` `/om off`,
     outermost `if (!enabled) return;` guard in every handler.
 4. `spawn/launch.ts` + `spawn/runs.ts` (IPC) + smoke test.
 5. Worker agent extension (observer mode) + `record_observations` terminal tool.

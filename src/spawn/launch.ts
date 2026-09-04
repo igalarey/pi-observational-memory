@@ -6,7 +6,7 @@
  * spawn a plain headless `pi` with no `--session-dir`, so the run is recorded under the
  * project path in `~/.pi/agent/sessions` and is openable in the session browser.
  */
-import { spawn } from "node:child_process";
+import spawn from "cross-spawn";
 import { mkdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -21,7 +21,11 @@ export function modelArg(model: ConfiguredModel): string {
 	return `${model.provider}/${model.id}`;
 }
 
-/** Resolve the `pi` entry point (subagents' trick), falling back to `pi` on PATH. */
+/**
+ * Resolve the active `pi` entry point (subagents' trick). The PATH fallback is launched through
+ * cross-spawn so npm's `pi.cmd` shim works on Windows as well as the native executable/shebang
+ * used by Unix shells; no interactive shell, terminal multiplexer, or TTY is required.
+ */
 export function resolvePiBinary(): { command: string; baseArgs: string[] } {
 	const entry = process.argv[1];
 	if (entry) {
@@ -40,7 +44,6 @@ export function resolvePiBinary(): { command: string; baseArgs: string[] } {
 export function buildWorkerArgv(opts: {
 	model: ConfiguredModel;
 	sessionName: string;
-	kickoffPrompt: string;
 	agentExtensionPath?: string;
 }): string[] {
 	const pi = resolvePiBinary();
@@ -57,7 +60,9 @@ export function buildWorkerArgv(opts: {
 	if (opts.model.thinking) args.push("--thinking", opts.model.thinking);
 	args.push("-e", opts.agentExtensionPath ?? AGENT_EXTENSION_PATH);
 	args.push("-n", opts.sessionName);
-	args.push("-p", opts.kickoffPrompt);
+	// The prompt is streamed through stdin by spawnWorker. Keeping it out of argv avoids the
+	// Windows CreateProcess command-line limit for normal multi-thousand-token chunks.
+	args.push("-p");
 	return [pi.command, ...args];
 }
 
@@ -74,6 +79,7 @@ export function spawnWorker(opts: {
 	argv: string[];
 	cwd: string;
 	env: NodeJS.ProcessEnv;
+	input?: string;
 	signal?: AbortSignal;
 }): Promise<WorkerExit> {
 	const [command, ...rest] = opts.argv;
@@ -82,13 +88,19 @@ export function spawnWorker(opts: {
 		const proc = spawn(command, rest, {
 			cwd: opts.cwd,
 			env: opts.env,
-			stdio: ["ignore", "ignore", "pipe"],
+			stdio: [opts.input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
 		});
 		let stderr = "";
 		proc.stderr?.on("data", (d: Buffer) => {
 			stderr += d.toString();
 		});
-		proc.on("error", () => resolvePromise({ code: 1, signal: null, stderr: stderr || "spawn error" }));
+		proc.stdin?.on("error", (error: NodeJS.ErrnoException) => {
+			if (error.code !== "EPIPE") stderr += `${stderr ? "\n" : ""}stdin error: ${error.message}`;
+		});
+		if (opts.input !== undefined) proc.stdin?.end(opts.input);
+		proc.on("error", (error) =>
+			resolvePromise({ code: 1, signal: null, stderr: stderr || `spawn error: ${error.message}` }),
+		);
 		proc.on("close", (code, signal) => resolvePromise({ code, signal, stderr }));
 
 		if (opts.signal) {
