@@ -16,6 +16,26 @@ describe("renderSummary (Phase A — observations only)", () => {
 		expect(obsSection).toBe("2026-05-02T10:00:01  first event\n2026-05-02T10:05:00  second event");
 	});
 
+	it("instructs consumers to verify historical completion claims", () => {
+		const block = renderSummary(undefined, undefined, [observation("2026-05-02T10:00:01")]);
+
+		expect(block).toContain(
+			"Verify the current files and tool results before relying on a historical claim; a yielded turn or pending asynchronous result is not completion.",
+		);
+	});
+
+	it("preserves contradictory and pending observations verbatim in chronological order", () => {
+		const block = renderSummary(undefined, undefined, [
+			observation("2026-05-02T10:05:00", { content: "Migration is incomplete; asynchronous verification is pending." }),
+			observation("2026-05-02T10:00:01", { content: "Migration is complete." }),
+		]);
+
+		expect(block.split("## Observations\n")[1]).toBe(
+			"2026-05-02T10:00:01  Migration is complete.\n" +
+				"2026-05-02T10:05:00  Migration is incomplete; asynchronous verification is pending.",
+		);
+	});
+
 	it("returns an empty string when there is nothing to render", () => {
 		expect(renderSummary(undefined, undefined, [])).toBe("");
 	});
