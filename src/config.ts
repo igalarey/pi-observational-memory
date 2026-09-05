@@ -35,9 +35,8 @@ export interface Config {
 		consolidator: ConfiguredModel;
 	};
 	/**
-	 * Resume the agent automatically after a compaction that fired mid-run (a `turn_end` with
-	 * pending tool work). A `turn_end` that is also the run's terminal turn never auto-resumes —
-	 * it stops as if nothing happened. Default true.
+	 * Deprecated compatibility setting. Automatic observational-memory compaction now runs only
+	 * after `agent_settled`, so it never interrupts a run and has nothing to resume.
 	 */
 	resumeAfterMidRunCompaction: boolean;
 	/** Power-user setting: disable all triggers (distinct from the on/off gate). */

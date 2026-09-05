@@ -22,10 +22,9 @@ export const OM_ENABLED = "om.enabled";
  */
 export const OM_COST = "om.cost";
 /**
- * Synthetic continuation message used to resume the agent loop after a mid-run compaction
- * (a `turn_end` that was NOT the run's terminal turn). Carried as a `role: "custom"` message
- * with `display: false` so it is hidden from the human TUI; pi still surfaces it to the model
- * as a user-role turn (convertToLlm rewrites custom → user). See hooks/compaction-trigger.ts.
+ * Legacy custom type from the former mid-run compaction workaround. It is retained so older
+ * session entries remain recognizable, but new compactions wait for `agent_settled` and never
+ * emit synthetic continuation messages.
  */
 export const OM_RESUME = "om.resume";
 

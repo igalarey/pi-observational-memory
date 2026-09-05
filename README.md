@@ -62,11 +62,12 @@ consolidator draining the oldest observations into durable per-session memory fi
 - **Observation** = `{ timestamp, content, tokenCount }`. The precise event-`timestamp`
   doubles as the id; the orchestrator re-derives a unique, second-resolution id at commit
   (the observer only emits minute resolution).
-- **Compaction** (`agent_end` over `compactAtContextTokens`, when idle): waits for in-flight
-  observers, then renders the active buffer plus a **memory map** (rendered live from
+- **Compaction** (`agent_settled` over `compactAtContextTokens`): waits for in-flight observers,
+  then renders the active buffer plus a **memory map** (rendered live from
   `.memory/<session>/` topic front-matter) and a **journey** section (`.memory/<session>/JOURNEY.md`, read
-  verbatim). The cutoff snaps to an observation chunk boundary so the verbatim tail is never
-  double-represented.
+  verbatim). It runs only after the agent settles because `ctx.compact()` aborts an active run;
+  this avoids recording that intentional cancellation as an assistant error. The cutoff snaps to
+  an observation chunk boundary so the verbatim tail is never double-represented.
 - **Consolidator clock** (`turn_end` / `agent_start`): when the active observation pool
   exceeds `consolidateAtPoolTokens`, a single background consolidator subprocess folds the
   **oldest** observations (above `poolTargetTokens`) into durable `.memory/<session>/<topic>.md`

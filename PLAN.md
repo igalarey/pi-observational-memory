@@ -37,12 +37,12 @@ consolidator has tombstoned the overflow.
 ```
 MASTER SESSION
 └─ orchestrator extension  (in-process, event-driven; the "conductor")
-     • clocks/triggers       → pi.on("turn_end" | "agent_end")
+     • clocks/triggers       → pi.on("turn_end" | "agent_settled")
      • spawns workers        → child_process.spawn(pi -e agent-ext -p ...)
      • commits observations  → pi.appendEntry("om.observations.recorded", …)   [ledger]
      • tombstones the batch  → pi.appendEntry("om.observations.dropped", …)    [ledger, Phase B]
      • deterministic compact → pi.on("session_before_compact") → {summary, firstKeptEntryId, …}
-     • compaction trigger    → pi.on("agent_end") → ctx.compact() when over threshold & idle
+     • compaction trigger    → pi.on("agent_settled") → ctx.compact() when over threshold
      • TUI                    → ctx.ui.setStatus / setWidget / notify
      • commands               → /om:status, /om:compact (debug surfaces)
 
@@ -88,7 +88,7 @@ observational-memory/
     hooks/
       observer-trigger.ts # raw-token clock → spawn parallel observers, commit results
       consolidator-trigger.ts  # [Phase B] pool-token clock → spawn one consolidator, tombstone promoted
-      compaction-trigger.ts    # agent_end → ctx.compact() when over compactAtContextTokens & idle
+      compaction-trigger.ts    # agent_settled → ctx.compact() when over compactAtContextTokens
       compaction-hook.ts       # session_before_compact → render map+buffer, cutoff on chunk boundary
     commands/
       status.ts           # /om:status
@@ -199,7 +199,7 @@ Goal: a working observer → ledger → injection → compaction loop that is co
 - **Command:** `/om` toggles; `/om on` / `/om off` set explicitly. On change: append the state
   entry, attach/detach TUI, `ctx.ui.notify("om enabled/disabled")`.
 - **Gate semantics:** when `enabled === false` the extension is **completely invisible and
-  does nothing** — every trigger (`turn_end` observer clock, `agent_end` compaction trigger),
+  does nothing** — every trigger (`turn_end` observer clock, `agent_settled` compaction trigger),
   the `session_before_compact` hook, all TUI, and all worker spawning return immediately at the
   top. No footer, no widgets, no ledger writes, no subprocesses. A single `if (!runtime.enabled) return;`
   is the first line of every handler (mirrors OM's `passive` short-circuit, but here it is the
@@ -281,20 +281,14 @@ pi --no-extensions --no-skills --no-prompt-templates --no-context-files \
   no markdown; prefer inline conversation timestamps." Drop relevance/sourceEntryIds language.
 
 ### A6. Compaction (`hooks/compaction-trigger.ts`, `hooks/compaction-hook.ts`)
-- **Trigger** (`turn_end`): if context pressure `>= compactAtContextTokens` and not already
-  compacting → `ctx.compact()` (fire-and-forget). `ctx.compact()` synchronously disconnects +
-  aborts the agent loop up front, so firing it from `turn_end` is race-free; the
+- **Trigger** (`agent_settled`): if context pressure `>= compactAtContextTokens` and not already
+  compacting → `ctx.compact()` (fire-and-forget). The settled event is emitted only after the
+  agent loop, retries, queued messages, and pi's own automatic compaction are finished. This is
+  important because `ctx.compact()` aborts an active run first; triggering it from `turn_end`
+  manufactures an assistant error such as "The operation was aborted.". The
   `session_before_compact` hook waits for in-flight observers so the block reflects settled
-  state. We fire on `turn_end` (not `agent_end`) so compaction pauses the chat *between* turns.
-- **Auto-resume after a mid-run compaction** (`resumeAfterMidRunCompaction`, default true):
-  a manual/threshold compaction always leaves the session idle (only pi's *internal overflow*
-  path auto-retries). To make a mid-run compaction transparent, in `onComplete` we resume the
-  agent ourselves via `ctx.sendMessage({ customType: "om.resume", display:false }, { triggerTurn:true })`
-  — a hidden custom message pi surfaces to the model as a user turn (no agent-*invisible* resume
-  exists through the public API; `convertToLlm` rewrites custom→user). The resume fires **only**
-  when the turn had pending tool work. A `turn_end` that is also the run's terminal turn
-  (`toolResults` empty) is left to stop, exactly as if no compaction happened. The mid-run
-  decision is captured from the `turn_end` event *before* compaction aborts/reloads.
+  state. Pi's native overflow compaction remains responsible for protecting a run that is still
+  in progress.
 - **Hook** (`session_before_compact`), deterministic + model-free:
   1. `preparation.firstKeptEntryId` gives pi's proposed kept tail. **Snap** it to the nearest
      **observation chunk boundary** (a covered `coversUpToId` source-entry id) such that the
@@ -321,7 +315,7 @@ pi --no-extensions --no-skills --no-prompt-templates --no-context-files \
 - `/om`, `/om on`, `/om off`: the on/off gate (A2a).
 - `/om:status`: in-flight workers, observation count, next-observer token progress, live
   context usage vs `compactAtContextTokens`, last worker error. Reports "om is off" when gated off.
-- `/om:compact`: force `ctx.compact()` now (ignores threshold). No-op when gated off.
+- `/om:compact`: force `ctx.compact()` (waits for an active run to settle; ignores threshold). No-op when gated off.
 
 ### A9. Phase A acceptance
 - Long scratch session: observers fire every ~`chunkTokens`, widgets stack, toasts log,
