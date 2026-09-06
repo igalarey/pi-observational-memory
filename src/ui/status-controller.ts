@@ -1,3 +1,5 @@
+import { truncateToWidth } from "@earendil-works/pi-tui";
+
 /**
  * TUI observability for observational memory, driven entirely by the in-process orchestrator
  * (subprocess workers are headless). Three surfaces:
@@ -28,9 +30,21 @@ interface Theme {
 	fg(color: string, text: string): string;
 }
 
+interface StatusWidgetComponent {
+	render(width: number): string[];
+	invalidate(): void;
+}
+
+interface StatusWidgetTui {
+	requestRender(): void;
+}
+
 export interface StatusUI {
 	setStatus(key: string, text: string | undefined): void;
-	setWidget(key: string, content: string[] | undefined): void;
+	setWidget(
+		key: string,
+		content: string[] | ((tui: StatusWidgetTui, theme: Theme) => StatusWidgetComponent) | undefined,
+	): void;
 	theme: Theme;
 }
 
@@ -61,6 +75,8 @@ export class StatusController {
 	private frame = 0;
 	private readonly workers = new Map<string, WorkerEntry>();
 	private spinnerTimer: ReturnType<typeof setInterval> | undefined;
+	private widgetTui: StatusWidgetTui | undefined;
+	private widgetInstalled = false;
 	private gauges: FooterGauges | undefined;
 	private cost: { costUsd: number; runs: number } | undefined;
 	private readonly spinnerIntervalMs: number;
@@ -84,7 +100,9 @@ export class StatusController {
 		this.workers.clear();
 		this.gauges = undefined;
 		this.cost = undefined;
-		this.ui?.setWidget(WORKERS_WIDGET_KEY, undefined);
+		if (this.widgetInstalled) this.ui?.setWidget(WORKERS_WIDGET_KEY, undefined);
+		this.widgetInstalled = false;
+		this.widgetTui = undefined;
 		if (this.ui) this.ui.setStatus(FOOTER_KEY, undefined);
 		this.ui = undefined;
 	}
@@ -186,18 +204,8 @@ export class StatusController {
 		return `${next}  ${pool}  ${ctx}${cost}`;
 	}
 
-	/**
-	 * Render all active/settling workers onto a single "om-workers" widget line so they
-	 * appear side-by-side rather than stacking vertically. Clears the widget when empty.
-	 */
-	private renderWorkersWidget(): void {
-		const ui = this.ui;
-		if (!ui) return;
-		if (this.workers.size === 0) {
-			ui.setWidget(WORKERS_WIDGET_KEY, undefined);
-			return;
-		}
-		const theme = ui.theme;
+	private renderWorkersLine(): string {
+		const theme = this.ui!.theme;
 		const parts: string[] = [];
 		for (const entry of this.workers.values()) {
 			if (entry.state.kind === "running") {
@@ -212,6 +220,31 @@ export class StatusController {
 				parts.push(`${theme.fg("success", "✓")} ${theme.fg("muted", `[${entry.type}]`)}${delta}`);
 			}
 		}
-		ui.setWidget(WORKERS_WIDGET_KEY, [parts.join(WORKER_SEP)]);
+		return parts.join(WORKER_SEP);
+	}
+
+	/** Keep one component registered so spinner refreshes cannot change global widget order. */
+	private renderWorkersWidget(): void {
+		const ui = this.ui;
+		if (!ui) return;
+		if (this.workers.size === 0) {
+			if (this.widgetInstalled) ui.setWidget(WORKERS_WIDGET_KEY, undefined);
+			this.widgetInstalled = false;
+			this.widgetTui = undefined;
+			return;
+		}
+		if (this.widgetInstalled) {
+			this.widgetTui?.requestRender();
+			return;
+		}
+
+		ui.setWidget(WORKERS_WIDGET_KEY, (tui) => {
+			this.widgetTui = tui;
+			return {
+				invalidate() {},
+				render: (width) => [truncateToWidth(this.renderWorkersLine(), width)],
+			};
+		});
+		this.widgetInstalled = true;
 	}
 }
