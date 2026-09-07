@@ -1,0 +1,40 @@
+{
+  "name": "observational-memory",
+  "version": "0.1.0",
+  "description": "Observational memory for pi — tiered, subprocess-backed memory: parallel observers feed a branch-local ledger buffer; a consolidator (Phase B) promotes the oldest observations into durable .memory/ topic files.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.0.0",
+    "typebox": "1.3.7",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.5"
+  }
+}
