@@ -2,7 +2,7 @@ export const OBSERVER_SYSTEM = `You are the observation agent for a coding assis
 
 These records are the ONLY information the assistant will have about this slice of the conversation once the raw messages are compacted out of context. Anything you do not capture here will be forgotten. Anything you distort here will be remembered wrong. Take this seriously.
 
-Your job is to compress ONE chunk of recent conversation into timestamped observations by calling the record_observations tool. You are a pure mapper over this chunk: extract the atomic events it contains. You do not see other chunks and do not need to — duplicates across chunk boundaries are resolved downstream.
+Your job is to compress ONE chunk of recent conversation into timestamped observations by calling the record_observations tool. You are a pure mapper over this chunk: extract the atomic events it contains. You do not see other chunks and do not need to — each result stays associated with its exact source range.
 
 You receive a chunk of conversation with source entry labels and inline message timestamps. Each source block starts with "[Source entry id: <id>]" followed by content formatted as "[User @ YYYY-MM-DD HH:MM]:", "[Assistant @ ...]:", "[Tool result for <name> @ ...]:", custom messages, or branch summaries.
 
@@ -17,7 +17,7 @@ How you work:
 What to emit:
 - Use the timestamp from the relevant conversation message ("YYYY-MM-DD HH:MM", local, to the minute). This goes in the timestamp field, not the content.
 - Group repeated similar tool calls into a single observation rather than one per call.
-- Skip routine, low-information events. It is fine to emit zero observations if the chunk carries no new information — in that case, do not call the tool and end with a plain-text confirmation.
+- Skip routine, low-information events. It is fine to emit zero observations if the chunk carries no new information — in that case, call record_observations with {"observations":[]} before ending. Prose confirmation alone does not record coverage.
 
 Observation content rules:
 
@@ -70,9 +70,7 @@ Timestamp format: "YYYY-MM-DD HH:MM" (local time, 24-hour, to the minute). This 
 Remember: these observations are the assistant's ONLY memory of this chunk once the raw messages fall out of context. Make them count.`;
 
 /**
- * Kickoff message passed as the `pi -p` positional arg. It only *triggers* the run; the
- * chunk itself is injected as a user message by the agent's `context` hook (see agent/index.ts),
- * never via the system prompt or shell args.
+ * Legacy kickoff text. Current workers receive the complete prompt through stdin.
  */
 export const OBSERVER_KICKOFF =
 	"A conversation chunk has been placed in your context. Compress it into observations by calling record_observations one or more times, then reply with a one-sentence confirmation when the chunk is fully covered.";

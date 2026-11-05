@@ -14,6 +14,7 @@ export function registerCompactCommand(pi: ExtensionAPI, runtime: Runtime): void
 				return;
 			}
 
+			const token = runtime.captureToken();
 			// AgentSession.compact() aborts an active run before compacting. Wait for a user
 			// command issued during streaming instead, otherwise the intentional abort is
 			// persisted and shown as an assistant error ("The operation was aborted.").
@@ -25,31 +26,34 @@ export function registerCompactCommand(pi: ExtensionAPI, runtime: Runtime): void
 				await ctx.waitForIdle();
 				if (ctx.isIdle?.() === false) return;
 			}
-			if (!runtime.enabled) return;
+			if (!runtime.isCurrent(token)) return;
 			if (runtime.compactInFlight) {
 				if (ctx.hasUI) ctx.ui.notify("om: compaction already in progress", "warning");
 				return;
 			}
 
-			runtime.compactInFlight = true;
+			const owner = runtime.beginCompaction();
 			// The before-compact hook waits for in-flight observers before folding (design R5),
 			// so we trigger compaction straight away here too.
 			if (ctx.hasUI) ctx.ui.notify("om: compacting (waiting for in-flight observers)…", "info");
 			try {
 				ctx.compact({
 					onComplete: () => {
-						runtime.compactInFlight = false;
+						if (!runtime.finishCompaction(owner)) return;
+						if (!runtime.isCurrent(token)) return;
 						if (ctx.hasUI) ctx.ui.notify("om: compaction complete", "info");
 					},
 					onError: (error: Error) => {
-						runtime.compactInFlight = false;
+						if (!runtime.finishCompaction(owner)) return;
+						if (!runtime.isCurrent(token)) return;
 						if (error.message !== "Compaction cancelled" && error.name !== "AbortError") {
 							runtime.lastWorkerError = `compaction failed: ${error.message}`;
 						}
 					},
 				});
 			} catch (error) {
-				runtime.compactInFlight = false;
+				if (!runtime.finishCompaction(owner)) return;
+				if (!runtime.isCurrent(token)) return;
 				const message = error instanceof Error ? error.message : String(error);
 				runtime.lastWorkerError = `compaction failed: ${message}`;
 			}

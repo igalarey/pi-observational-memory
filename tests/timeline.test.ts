@@ -7,9 +7,13 @@ import {
 	compactionEntry,
 	observation,
 	observationsDroppedEntry,
-	observationsRecordedEntry,
+	observationsRecordedEntry as legacyRecordedEntry,
 	rawMessage,
 } from "./fixtures/session.js";
+
+function observationsRecordedEntry(id: string, args: Parameters<typeof legacyRecordedEntry>[1]) {
+	return legacyRecordedEntry(id, { ...args, coverageVersion: 2, sourceEntryIds: [args.coversUpToId] });
+}
 
 const cfg = { ...DEFAULTS, chunkTokens: 3000, consolidateAtPoolTokens: 10_000, poolTargetTokens: 5_000 };
 

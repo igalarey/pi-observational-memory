@@ -149,7 +149,7 @@ export function loadConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): C
 	const globalPath = join(getAgentDir(), "settings.json");
 	const projectPath = join(cwd, ".pi", "settings.json");
 	const globalConfig = readNamespacedConfig(globalPath, DEFAULTS);
-	const projectConfig = readNamespacedConfig(projectPath, DEFAULTS);
+	const projectConfig = readNamespacedConfig(projectPath, { ...DEFAULTS, ...globalConfig });
 	const envConfig = readEnvConfig(env);
 	return {
 		...DEFAULTS,

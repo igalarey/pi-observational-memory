@@ -4,6 +4,8 @@ import { listTopics, readJourney } from "../memory/paths.js";
 import type { Runtime } from "../runtime.js";
 import {
 	buildCompactionProjection,
+	contiguousCoverageIndex,
+	OM_OBSERVATIONS_DROPPED,
 	entryIndexById,
 	isObservationsRecordedEntry,
 	isSourceEntry,
@@ -17,10 +19,11 @@ import {
 function chunkBoundaryIndices(branch: Entry[]): number[] {
 	const indexes = entryIndexById(branch);
 	const set = new Set<number>();
+	const contiguous = contiguousCoverageIndex(branch);
 	for (const entry of branch) {
 		if (!isObservationsRecordedEntry(entry)) continue;
 		const idx = indexes.get(entry.data.coversUpToId);
-		if (idx !== undefined) set.add(idx);
+		if (idx !== undefined && idx <= contiguous) set.add(idx);
 	}
 	return Array.from(set).sort((a, b) => a - b);
 }
@@ -121,6 +124,7 @@ export function registerCompactionHook(pi: ExtensionAPI, runtime: Runtime): void
 		}
 
 		runtime.compactHookInFlight = true;
+		const token = runtime.captureToken();
 		try {
 			runtime.ensureConfig(ctx.cwd);
 			const tailTokens = runtime.config.tailTokens;
@@ -140,19 +144,22 @@ export function registerCompactionHook(pi: ExtensionAPI, runtime: Runtime): void
 			runtime.lastCompactionObserverWait = skip ? "skipped" : "waited";
 			if (!skip) {
 				if (hasUI) ctx.ui.notify("om: waiting for in-flight observers before folding…", "info");
-				await runtime.whenObserversIdle();
+				await runtime.whenObserversIdle(event.signal);
 				branch = (ctx.sessionManager?.getBranch?.() as Entry[] | undefined) ?? (event.branchEntries as Entry[]);
 				snap = snapCutoff(branch, firstKeptEntryId, tailTokens);
 			}
 
+			if (!runtime.isCurrent(token) || event.signal?.aborted) return { cancel: true };
+			if (snap.tail === undefined) return undefined;
 			const snapped = snap.firstKeptId;
-			const projection = buildCompactionProjection(branch, snapped);
+			// Ledger evidence remains available when legacy drops or historical branches lack durable files.
+			const projection = buildCompactionProjection(branch.filter(entry => entry.customType !== OM_OBSERVATIONS_DROPPED), snapped);
 			// Phase B: render the long-term tier live from disk, regenerated each compaction
 			// (throwaway projections — cannot decay). The journey is the running descriptive history
 			// the consolidator maintains; the map is the topic-file index.
 			const journey = readJourney(runtime.memoryRoot);
 			const map = renderMemoryMap(listTopics(runtime.memoryRoot));
-			const summary = renderSummary(journey, map, projection.observations);
+			const summary = renderSummary(journey, map, projection.observations) || "The covered conversation prefix was reviewed and contained no retained observations.";
 
 			return {
 				compaction: {

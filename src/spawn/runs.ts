@@ -1,70 +1,41 @@
-/**
- * File-based IPC between the in-process orchestrator and subprocess workers.
- *
- * A subprocess cannot append to the master's ledger, so it writes its output to a transient
- * result file under `<project>/.memory/.runs/<runId>.json`. The orchestrator reads + validates
- * it after the process exits, then commits to the right tier (observations → ledger).
- *
- * Worker recordings themselves live in pi's GLOBAL session store, not here (decision 11).
- * `.memory/.runs/` clutter is not GC'd in v1 (accepted).
- */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { assertNoSymlinks, atomicWrite, safeRead } from "../memory/paths.js";
+export { atomicWrite } from "../memory/paths.js";
 
-/** What the observer model emits, before the orchestrator re-derives precise timestamp-ids. */
-export type RawObservation = {
-	timestamp: string; // "YYYY-MM-DD HH:MM"
-	content: string;
-};
+export type RawObservation = { timestamp: string; content: string };
+export type ObserverRunResult = { observations: RawObservation[] };
+export type WorkerCostResult = { costUsd: number };
 
-export type ObserverRunResult = {
-	observations: RawObservation[];
-};
+export function runsDir(root: string): string { return join(root, ".runs"); }
+export function runResultPath(root: string, runId: string): string { return join(runsDir(root), `${runId}.result.json`); }
+export function runCostPath(root: string, runId: string): string { return join(runsDir(root), `${runId}.cost.json`); }
 
-export function runsDir(root: string): string {
-	return join(root, ".runs");
-}
-
-export function runResultPath(root: string, runId: string): string {
-	return join(runsDir(root), `${runId}.result.json`);
-}
-
-/**
- * Per-run cost handoff file. Written by the worker EXTENSION (never the model) from pi's
- * built-in `usage.cost.total`, read by the orchestrator after the process exits. Uniform
- * across roles — the consolidator has no observations result file but still reports cost here.
- */
-export function runCostPath(root: string, runId: string): string {
-	return join(runsDir(root), `${runId}.cost.json`);
-}
-
-export type WorkerCostResult = {
-	costUsd: number;
-};
-
-export function writeWorkerCost(path: string, cost: WorkerCostResult): void {
-	atomicWrite(path, JSON.stringify(cost));
-}
-
-/** Best-effort read of a worker cost file; returns undefined on missing/malformed input. */
+export function writeWorkerCost(path: string, cost: WorkerCostResult): void { atomicWrite(path, JSON.stringify(cost)); }
 export function readWorkerCost(path: string): WorkerCostResult | undefined {
 	try {
-		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+		const raw = JSON.parse(safeRead(path)) as unknown;
 		if (!raw || typeof raw !== "object") return undefined;
 		const cost = (raw as { costUsd?: unknown }).costUsd;
 		if (typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) return undefined;
 		return { costUsd: cost };
-	} catch {
-		return undefined;
-	}
+	} catch { return undefined; }
 }
 
-/** Atomic write (temp + rename) so a reader never sees a half-written file. */
-export function atomicWrite(path: string, content: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, content, "utf-8");
-	renameSync(tmp, path);
+export function pruneRuns(root: string, active: Set<string> = new Set(), keep = 100): void {
+	const dir = runsDir(root);
+	if (!existsSync(dir)) return;
+	assertNoSymlinks(dir);
+	const files = readdirSync(dir).flatMap(name => {
+		const match = /^((?:obs|cons)-\d+-\d+-\d+(?:-[a-f0-9-]{36})?)\.(?:(?:result|cost)\.json|stage-[a-zA-Z0-9]+)$/.exec(name);
+		if (!match || active.has(match[1])) return [];
+		const path = join(dir, name), stat = lstatSync(path);
+		return stat.isFile() || stat.isDirectory() ? [{ path, mtime: stat.mtimeMs, directory: stat.isDirectory() }] : [];
+	}).sort((a, b) => b.mtime - a.mtime);
+	for (const file of files.slice(keep)) {
+		if (file.directory) rmSync(file.path, { recursive: true, force: true });
+		else unlinkSync(file.path);
+	}
 }
 
 function isRawObservation(value: unknown): value is RawObservation {
@@ -73,16 +44,14 @@ function isRawObservation(value: unknown): value is RawObservation {
 	return typeof v.timestamp === "string" && typeof v.content === "string" && v.content.trim().length > 0;
 }
 
-/** Parse + validate an observer result file. Throws on malformed input. */
 export function readObserverResult(path: string): ObserverRunResult {
-	const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+	let raw: unknown;
+	try { raw = JSON.parse(safeRead(path)); } catch { throw new Error("Missing or invalid observer result JSON"); }
 	if (!raw || typeof raw !== "object" || !Array.isArray((raw as { observations?: unknown }).observations)) {
 		throw new Error("observer result missing observations array");
 	}
-	const observations = (raw as { observations: unknown[] }).observations.filter(isRawObservation);
+	const observations = (raw as { observations: unknown[] }).observations;
+	if (!observations.every(isRawObservation)) throw new Error("Invalid observation result");
 	return { observations };
 }
-
-export function writeObserverResult(path: string, result: ObserverRunResult): void {
-	atomicWrite(path, JSON.stringify(result));
-}
+export function writeObserverResult(path: string, result: ObserverRunResult): void { atomicWrite(path, JSON.stringify(result)); }

@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { assignObservationTimestamps } from "../ids.js";
 import {
-	entryIndexForId,
+	completedSourceIds,
+	isSourceEntry,
 	foldLedger,
-	latestCoverageMarkerId,
 	nowTimestamp,
 	rawTokensAfterIndex,
 	selectSourceSlice,
@@ -15,7 +16,7 @@ import {
 } from "../ledger/index.js";
 import type { Runtime } from "../runtime.js";
 import { buildWorkerArgv, buildWorkerEnv, spawnWorker } from "../spawn/launch.js";
-import { readObserverResult, readWorkerCost, runCostPath, runResultPath } from "../spawn/runs.js";
+import { pruneRuns, readObserverResult, readWorkerCost, runCostPath, runResultPath } from "../spawn/runs.js";
 
 type TriggerCtx = {
 	hasUI: boolean;
@@ -46,22 +47,19 @@ export function recordWorkerCost(
 function nextRunId(): string {
 	runCounter += 1;
 	const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
-	return `obs-${stamp}-${process.pid}-${runCounter}`;
+	return `obs-${stamp}-${process.pid}-${runCounter}-${randomUUID()}`;
 }
 
-/** The later (by branch index) of two coverage markers; undefined when neither resolves. */
-function laterMarkerId(branch: Entry[], a: string | undefined, b: string | undefined): string | undefined {
-	const ia = entryIndexForId(branch, a);
-	const ib = entryIndexForId(branch, b);
-	if (ia < 0 && ib < 0) return undefined;
-	return ia >= ib ? a : b;
-}
-
-/** Effective watermark = later of committed ledger coverage and the in-memory dispatch marker. */
-function effectiveWatermarkId(runtime: Runtime, branch: Entry[]): string | undefined {
-	const committed = latestCoverageMarkerId(branch, OM_OBSERVATIONS_RECORDED);
-	const dispatchedResolved = entryIndexForId(branch, runtime.dispatchedCoversUpToId) >= 0 ? runtime.dispatchedCoversUpToId : undefined;
-	return laterMarkerId(branch, committed, dispatchedResolved);
+function pendingSources(runtime: Runtime, branch: Entry[]): Entry[] {
+	const reserved = completedSourceIds(branch);
+	for (const run of runtime.observersInFlight.values()) {
+		for (const id of run.sourceEntryIds ?? []) reserved.add(id);
+	}
+	const sources = branch.filter(isSourceEntry);
+	const start = sources.findIndex(entry => !reserved.has(entry.id));
+	if (start < 0) return [];
+	const end = sources.findIndex((entry, index) => index > start && reserved.has(entry.id));
+	return sources.slice(start, end < 0 ? undefined : end);
 }
 
 /**
@@ -83,17 +81,17 @@ export function evaluateObserverTriggers(pi: ExtensionAPI, runtime: Runtime, ctx
 
 	while (runtime.observerSlotsAvailable > 0) {
 		const branch = sessionManager.getBranch();
-		const watermarkId = effectiveWatermarkId(runtime, branch);
-		const watermarkIndex = entryIndexForId(branch, watermarkId);
-		const remaining = rawTokensAfterIndex(branch, watermarkIndex);
+		const pending = pendingSources(runtime, branch);
+		const remaining = rawTokensAfterIndex(pending, -1);
 		// Use break (not return) so execution always reaches the post-loop notify.
 		// A return here would exit the function before the batched start-toast fires.
-		if (remaining < runtime.config.chunkTokens) break;
+		if (!pending.length) break;
+		const hasLaterRange = branch.filter(isSourceEntry).at(-1)?.id !== pending.at(-1)?.id;
+		if (remaining < runtime.config.chunkTokens && !hasLaterRange) break;
 
-		const slice = selectSourceSlice(branch, watermarkId, runtime.config.chunkTokens);
+		const slice = selectSourceSlice(pending, undefined, runtime.config.chunkTokens);
 		if (slice.entries.length === 0 || !slice.coversUpToId) break;
 
-		runtime.dispatchedCoversUpToId = slice.coversUpToId;
 		runtime.trackObserverTask(
 			dispatchObserver(pi, runtime, { hasUI, ui, sessionManager, getContextUsage: ctx.getContextUsage }, slice),
 		);
@@ -113,7 +111,10 @@ async function dispatchObserver(
 	const runId = nextRunId();
 	const controller = new AbortController();
 	const coversUpToId = slice.coversUpToId!;
-	runtime.observersInFlight.set(runId, { controller, coversUpToId });
+	const token = runtime.captureToken();
+	const memoryRoot = runtime.memoryRoot;
+	const sourceEntryIds = slice.entries.map(entry => entry.id);
+	runtime.observersInFlight.set(runId, { controller, coversUpToId, sourceEntryIds });
 
 	const { text: chunkText } = serializeSourceAddressedBranchEntries(slice.entries);
 	const lastEntry = slice.entries.at(-1);
@@ -150,10 +151,13 @@ async function dispatchObserver(
 		});
 		const env = buildWorkerEnv("observer", { memoryRoot: runtime.memoryRoot, runId });
 		const exit = await spawnWorker({ argv, cwd: runtime.memoryRoot, env, input: userText, signal: controller.signal });
+		if (controller.signal.aborted || !runtime.isCurrent(token)) return;
+		const currentIds = new Set(ctx.sessionManager.getBranch().map(entry => entry.id));
+		if (sourceEntryIds.some(id => !currentIds.has(id))) return;
 		// Capture cost before the exit-code check so a partial run's spend is still recorded.
 		recordWorkerCost(pi, runtime, ctx, "observer", runId);
 		if (exit.code !== 0) {
-			throw new Error(`observer exited with code ${exit.code}${exit.stderr ? `: ${exit.stderr.trim().slice(0, 200)}` : ""}`);
+			throw new Error(`observer exited with code ${exit.code}`);
 		}
 
 		const result = readObserverResult(runResultPath(runtime.memoryRoot, runId));
@@ -164,9 +168,7 @@ async function dispatchObserver(
 			fallbackAnchor: lastEntry?.timestamp,
 		});
 
-		if (observations.length > 0) {
-			pi.appendEntry(OM_OBSERVATIONS_RECORDED, { observations, coversUpToId });
-		}
+		pi.appendEntry(OM_OBSERVATIONS_RECORDED, { observations, coversUpToId, sourceEntryIds, coverageVersion: 2 });
 		runtime.status.workerDone(runId, observations.length);
 		runtime.refreshFooterGauges(ctx.sessionManager.getBranch(), ctx.getContextUsage?.()?.tokens ?? null);
 		if (ctx.hasUI && ctx.ui) {
@@ -179,6 +181,7 @@ async function dispatchObserver(
 			);
 		}
 	} catch (error) {
+		if (controller.signal.aborted || !runtime.isCurrent(token)) return;
 		const message = error instanceof Error ? error.message : String(error);
 		runtime.lastWorkerError = message;
 		runtime.status.workerError(runId);
@@ -187,6 +190,7 @@ async function dispatchObserver(
 		if (ctx.hasUI) ctx.ui?.notify(`om: observer failed: ${message}`, "error");
 	} finally {
 		runtime.observersInFlight.delete(runId);
+		try { pruneRuns(memoryRoot, new Set([...runtime.observersInFlight.keys(), ...(runtime.consolidatorRunId ? [runtime.consolidatorRunId] : [])])); } catch {}
 	}
 }
 

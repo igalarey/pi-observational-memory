@@ -41,7 +41,7 @@ describe("ensureSessionMemory", () => {
 		expect(existsSync(root)).toBe(false);
 	});
 
-	it("seeds from the parent session on first touch, excluding .runs/", () => {
+	it("does not import current parent files at an unknown historical fork point", () => {
 		const parentRoot = sessionMemoryRoot(cwd, "parent");
 		mkdirSync(join(parentRoot, ".runs"), { recursive: true });
 		writeFileSync(join(parentRoot, "auth.md"), "---\nid: auth\n---\nbody", "utf-8");
@@ -52,8 +52,8 @@ describe("ensureSessionMemory", () => {
 		const root = ensureSessionMemory(fakeCtx("child", { parentSession: parentFile }));
 
 		expect(root).toBe(sessionMemoryRoot(cwd, "child"));
-		expect(readFileSync(join(root, "auth.md"), "utf-8")).toContain("body");
-		expect(readFileSync(join(root, "JOURNEY.md"), "utf-8")).toBe("## history");
+		expect(existsSync(join(root, "auth.md"))).toBe(false);
+		expect(existsSync(join(root, "JOURNEY.md"))).toBe(false);
 		// Transient IPC is never carried across the fork.
 		expect(existsSync(join(root, ".runs"))).toBe(false);
 	});

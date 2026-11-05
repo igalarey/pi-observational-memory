@@ -3,6 +3,8 @@ import { foldLedger, poolTokens, rawTokensSinceObservationCoverage, sumSessionCo
 import { listTopics, readJourney } from "../memory/paths.js";
 import { estimateStringTokens } from "../tokens.js";
 import type { Runtime } from "../runtime.js";
+import { DATA_POLICY } from "../privacy.js";
+import { modelArg } from "../spawn/launch.js";
 import { renderTimeline } from "../ui/timeline.js";
 
 export function registerStatusCommand(pi: ExtensionAPI, runtime: Runtime): void {
@@ -26,6 +28,9 @@ export function registerStatusCommand(pi: ExtensionAPI, runtime: Runtime): void 
 
 			const lines = [
 				`om status`,
+				`  observer provider/model: ${modelArg(runtime.config.models.observer)}`,
+				`  consolidator provider/model: ${modelArg(runtime.config.models.consolidator)}`,
+				`  data policy: ${DATA_POLICY}`,
 				`  observers in flight: ${runtime.observersInFlight.size} / ${runtime.config.observerConcurrency}`,
 				`  active observations: ${folded.activeObservations.length}`,
 				`  next observer: ${sinceObservation.toLocaleString()} / ${runtime.config.chunkTokens.toLocaleString()} tok`,

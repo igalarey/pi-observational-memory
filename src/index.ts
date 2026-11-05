@@ -17,7 +17,9 @@ import { registerCompactionTrigger } from "./hooks/compaction-trigger.js";
 import { registerConsolidatorTrigger } from "./hooks/consolidator-trigger.js";
 import { registerObserverTrigger } from "./hooks/observer-trigger.js";
 import { OM_ENABLED, type Entry } from "./ledger/index.js";
-import { ensureSessionMemory } from "./memory/session.js";
+import { OM_MEMORY_SCOPE, selectMemoryScope } from "./memory/session.js";
+import { DATA_POLICY } from "./privacy.js";
+import { modelArg } from "./spawn/launch.js";
 import { Runtime } from "./runtime.js";
 
 export function readGateFromLedger(branch: Entry[]): boolean {
@@ -41,20 +43,49 @@ export default function observationalMemory(pi: ExtensionAPI): void {
 		}
 	}
 
+	function setMemoryScope(ctx: any, forceNew = false): void {
+		const sessionId = ctx.sessionManager.getSessionId();
+		const scope = selectMemoryScope(ctx.cwd, sessionId, ctx.sessionManager.getBranch(), forceNew);
+		runtime.sessionId = sessionId;
+		runtime.branchId = scope.scopeId;
+		runtime.memoryRoot = scope.root;
+		if (scope.fresh) pi.appendEntry(OM_MEMORY_SCOPE, { scopeId: scope.scopeId });
+	}
+
+	function announcePolicy(ctx: any): void {
+		pi.appendEntry("om.data-policy", { version: 1, models: runtime.config.models, thinkingCapture: false, credentialRedaction: "best-effort" });
+		if (ctx.hasUI) ctx.ui.notify(`om: observer ${modelArg(runtime.config.models.observer)}; consolidator ${modelArg(runtime.config.models.consolidator)}. ${DATA_POLICY}`, "info");
+	}
+
 	pi.on("session_start", (_event: unknown, ctx: any) => {
+		runtime.abortAllWorkers();
+		runtime.configLoaded = false;
 		runtime.ensureConfig(ctx.cwd);
-		runtime.dispatchedCoversUpToId = undefined;
 		const branch = ctx.sessionManager.getBranch() as Entry[];
 		runtime.enabled = readGateFromLedger(branch);
-		if (runtime.enabled) runtime.memoryRoot = ensureSessionMemory(ctx);
+		if (runtime.enabled) { setMemoryScope(ctx); announcePolicy(ctx); }
 		attachIfEnabled(ctx);
 		runtime.refreshFooterGauges(branch, ctx.getContextUsage?.()?.tokens ?? null);
 		runtime.refreshCost(ctx.sessionManager.getEntries() as Entry[]);
 	});
 
-	pi.on("session_shutdown", () => {
+	const invalidate = async () => { runtime.abortAllWorkers(); await runtime.whenWorkersIdle(); };
+	pi.on("session_before_tree", invalidate);
+	pi.on("session_before_fork", invalidate);
+	pi.on("session_before_switch", invalidate);
+	pi.on("session_tree", (_event, ctx) => {
+		runtime.abortAllWorkers();
+		const branch = ctx.sessionManager.getBranch() as Entry[];
+		runtime.enabled = readGateFromLedger(branch);
+		if (runtime.enabled) setMemoryScope(ctx, true);
+		attachIfEnabled(ctx);
+		runtime.refreshFooterGauges(branch, ctx.getContextUsage?.()?.tokens ?? null);
+	});
+
+	pi.on("session_shutdown", async () => {
 		runtime.status.detach();
 		runtime.abortAllWorkers();
+		await runtime.whenWorkersIdle();
 	});
 
 	pi.registerCommand("om", {
@@ -69,7 +100,8 @@ export default function observationalMemory(pi: ExtensionAPI): void {
 			runtime.enabled = next;
 			pi.appendEntry(OM_ENABLED, { enabled: next });
 			if (next) {
-				runtime.memoryRoot = ensureSessionMemory(ctx);
+				setMemoryScope(ctx);
+				announcePolicy(ctx);
 				attachIfEnabled(ctx);
 				runtime.refreshFooterGauges(ctx.sessionManager.getBranch() as Entry[], ctx.getContextUsage?.()?.tokens ?? null);
 				runtime.refreshCost(ctx.sessionManager.getEntries() as Entry[]);

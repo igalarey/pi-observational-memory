@@ -38,8 +38,12 @@ test("Pi 0.85.1 loads observational memory and registers its commands and hooks"
 			"agent_settled",
 			"agent_start",
 			"session_before_compact",
+			"session_before_fork",
+			"session_before_switch",
+			"session_before_tree",
 			"session_shutdown",
 			"session_start",
+			"session_tree",
 			"turn_end",
 		]);
 	} finally {

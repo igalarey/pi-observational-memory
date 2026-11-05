@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import type { ConfiguredModel } from "../config.js";
 import { runCostPath, runResultPath } from "./runs.js";
+import { assertNoSymlinks } from "../memory/paths.js";
+import { redactCredentials } from "../privacy.js";
 
 /** Repo root = two levels up from src/spawn/. The shared agent extension lives at agent/index.ts. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -81,38 +83,55 @@ export function spawnWorker(opts: {
 	env: NodeJS.ProcessEnv;
 	input?: string;
 	signal?: AbortSignal;
+	timeoutMs?: number;
+	killGraceMs?: number;
 }): Promise<WorkerExit> {
+	if (opts.signal?.aborted) return Promise.resolve({ code: null, signal: "SIGTERM", stderr: "Cancelled before spawn" });
 	const [command, ...rest] = opts.argv;
-	mkdirSync(opts.cwd, { recursive: true });
+	assertNoSymlinks(opts.cwd);
+	mkdirSync(opts.cwd, { recursive: true, mode: 0o700 });
 	return new Promise<WorkerExit>((resolvePromise) => {
 		const proc = spawn(command, rest, {
 			cwd: opts.cwd,
 			env: opts.env,
+			detached: process.platform !== "win32",
 			stdio: [opts.input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
 		});
 		let stderr = "";
+		let closed = false;
+		let killTimer: ReturnType<typeof setTimeout> | undefined;
+		const signalProcess = (signal: NodeJS.Signals) => {
+			if (closed) return;
+			try {
+				if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, signal);
+				else proc.kill(signal);
+			} catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") proc.kill(signal); }
+		};
+		const kill = () => {
+			if (closed || killTimer) return;
+			signalProcess("SIGTERM");
+			killTimer = setTimeout(() => signalProcess("SIGKILL"), opts.killGraceMs ?? 3000);
+		};
+		const deadline = setTimeout(kill, Math.min(opts.timeoutMs ?? 600_000, 1_800_000));
+		const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+			if (closed) return;
+			closed = true;
+			clearTimeout(deadline);
+			clearTimeout(killTimer);
+			opts.signal?.removeEventListener("abort", kill);
+			resolvePromise({ code, signal, stderr: redactCredentials(stderr) });
+		};
 		proc.stderr?.on("data", (d: Buffer) => {
-			stderr += d.toString();
+			stderr = (stderr + d.toString()).slice(-16_384);
 		});
 		proc.stdin?.on("error", (error: NodeJS.ErrnoException) => {
 			if (error.code !== "EPIPE") stderr += `${stderr ? "\n" : ""}stdin error: ${error.message}`;
 		});
-		if (opts.input !== undefined) proc.stdin?.end(opts.input);
-		proc.on("error", (error) =>
-			resolvePromise({ code: 1, signal: null, stderr: stderr || `spawn error: ${error.message}` }),
-		);
-		proc.on("close", (code, signal) => resolvePromise({ code, signal, stderr }));
-
-		if (opts.signal) {
-			const kill = () => {
-				proc.kill("SIGTERM");
-				setTimeout(() => {
-					if (!proc.killed) proc.kill("SIGKILL");
-				}, 3000).unref?.();
-			};
-			if (opts.signal.aborted) kill();
-			else opts.signal.addEventListener("abort", kill, { once: true });
-		}
+		if (opts.input !== undefined) proc.stdin?.end(redactCredentials(opts.input));
+		proc.on("error", error => { stderr = `spawn error: ${error.message}`; if (!proc.pid) finish(1, null); });
+		proc.on("close", finish);
+		if (opts.signal?.aborted) kill();
+		else opts.signal?.addEventListener("abort", kill, { once: true });
 	});
 }
 

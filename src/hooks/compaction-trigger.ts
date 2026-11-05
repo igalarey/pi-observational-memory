@@ -52,26 +52,29 @@ export function evaluateCompactionTrigger(runtime: Runtime, ctx: CompactionTrigg
 
 	const hasUI = ctx.hasUI;
 	const ui = ctx.ui;
-	runtime.compactInFlight = true;
+	const owner = runtime.beginCompaction();
+	const token = runtime.captureToken();
 	if (hasUI) ui?.notify("om: context threshold reached — compacting (waiting for in-flight observers)…", "info");
 
 	// Fire-and-forget. The before-compact hook waits for observers and renders the block.
 	try {
 		ctx.compact({
 			onComplete: () => {
-				runtime.compactInFlight = false;
+				if (!runtime.finishCompaction(owner)) return;
+				if (!runtime.isCurrent(token)) return;
 				if (hasUI) ui?.notify("om: compaction complete", "info");
 			},
 			onError: (error) => {
-				runtime.compactInFlight = false;
+				if (!runtime.finishCompaction(owner)) return;
+				if (!runtime.isCurrent(token)) return;
 				// Compaction can legitimately lose a race with the agent/session lifecycle. Keep the
 				// detail available to /om:status, but do not turn it into a red toast.
 				recordCompactionFailure(runtime, error);
 			},
 		});
 	} catch (error) {
-		runtime.compactInFlight = false;
-		recordCompactionFailure(runtime, error);
+		if (!runtime.finishCompaction(owner)) return;
+		if (runtime.isCurrent(token)) recordCompactionFailure(runtime, error);
 	}
 }
 

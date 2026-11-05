@@ -1,165 +1,128 @@
 # observational-memory
 
-Tiered, subprocess-backed memory for pi.
+Local, subprocess-backed memory for Pi. Parallel observers summarize conversation chunks into a branch-local ledger. A consolidator promotes observations into local Markdown files.
 
-Parallel **observers** distill raw conversation chunks into atomic observations committed to the master's branch-local **ledger** (so memory stays correct under `/tree`); a deterministic, model-free **compaction** renders that buffer verbatim into the compaction block. A **consolidator** promotes the oldest observations into durable `.memory/<sessionId>/` topic files, bounding the buffer and giving each session its own durable, `grep`-able long-term memory (a fork seeds its memory from its parent).
+## Installation and controls
 
-## Installation
+Install this checkout with `pi install .`, then restart Pi or use `/reload`. A working Pi CLI and Node.js are required. Workers use stdin, not command-line arguments, for prompts. No terminal multiplexer is required.
 
-A working `pi` CLI and Node.js/npm are required. **tmux is not required.** Workers run as
-headless child processes with no attached TTY; prompts are streamed through stdin instead of
-the size-limited command line. The launcher reuses the active pi entry point and has a
-cross-platform PATH fallback for npm shims, so it works from ordinary terminals and shells on
-Windows, macOS, and Linux.
-
-From this repository:
-
-```bash
-npm install
-pi install .
-```
-
-Restart pi (or run `/reload`); observational memory is enabled automatically. Confirm the
-package with `pi list` and inspect runtime state with `/om:status`. The package is installed by
-local path, so keep this checkout in place. Configure worker models below if the defaults are
-not authenticated in your pi installation.
-
-## On/off gate (default ON)
-
-The extension is **enabled automatically per session**. You can explicitly disable it when a
-session should run without observational memory.
-
-- `/om` — toggle for this session
-- `/om on` / `/om off` — set explicitly
-
-Explicit state persists per session in the ledger (`om.enabled`) and survives resume. Existing
-sessions explicitly set to off remain off. When off, every trigger, hook, widget, and
-subprocess returns immediately.
-
-## How it works
-
-```mermaid
-flowchart LR
-    A["raw chunks<br/><i>token-bounded, fixed slices</i>"]
-    B["parallel observers<br/><i>subprocess pi, headless</i>"]
-    C["observations<br/><i>{timestamp, content}</i>"]
-    D["master ledger<br/><i>branch-local, /tree-correct</i>"]
-    E["compaction block<br/><i>deterministic, model-free</i>"]
-    F["consolidator<br/><i>subprocess pi, one at a time</i>"]
-    G[".memory/&lt;session&gt;/&lt;topic&gt;.md + INDEX.md<br/><i>durable, per-session, grep-able;<br/>tombstones drain buffer</i>"]
-
-    A --> B --> C --> D --> E
-    D -- "oldest overflow<br/>(pool > consolidateAtPoolTokens)" --> F --> G
-```
-
-Pipeline: raw chunks → observers → observations → ledger → compaction block, with a
-consolidator draining the oldest observations into durable per-session memory files.
-
-- **Observer clock** (`turn_end` / `agent_start`): every `chunkTokens` of new raw history,
-  cut a fixed-token slice and fire an observer subprocess. Observers are embarrassingly
-  parallel pure mappers (capped by `observerConcurrency`); each commits its own
-  `coversUpToId` watermark, so out-of-order completion is fine.
-- **Observation** = `{ timestamp, content, tokenCount }`. The precise event-`timestamp`
-  doubles as the id; the orchestrator re-derives a unique, second-resolution id at commit
-  (the observer only emits minute resolution).
-- **Compaction** (`agent_settled` over `compactAtContextTokens`): waits for in-flight observers,
-  then renders the active buffer plus a **memory map** (rendered live from
-  `.memory/<session>/` topic front-matter) and a **journey** section (`.memory/<session>/JOURNEY.md`, read
-  verbatim). It runs only after the agent settles because `ctx.compact()` aborts an active run;
-  this avoids recording that intentional cancellation as an assistant error. The cutoff snaps to
-  an observation chunk boundary so the verbatim tail is never double-represented.
-- **Consolidator clock** (`turn_end` / `agent_start`): when the active observation pool
-  exceeds `consolidateAtPoolTokens`, a single background consolidator subprocess folds the
-  **oldest** observations (above `poolTargetTokens`) into durable `.memory/<session>/<topic>.md`
-  files, then the orchestrator tombstones exactly the observations it reports — draining the
-  buffer back toward target. Topic files are **scoped per session** (`.memory/<sessionId>/`,
-  keyed by the immutable session-header id, so two sessions in the same project never share
-  output) and track the session, not the branch: they are **not** rolled back by `/tree`. On a
-  fork/clone the new session's memory is **seeded once** from the parent (matching the ledger,
-  which already travels with the fork). The orchestrator owns `INDEX.md` and re-renders it from
-  topic front-matter after each run; the consolidator touches `<topic>.md` files plus
-  `JOURNEY.md`, via its own `read`/`write`/`edit`/`ls`/`grep` tools scoped to the session dir.
-- **Journey** (`.memory/<session>/JOURNEY.md`): a single, whole-project, purely **descriptive** prose
-  history of how the work got to its current state, maintained by the consolidator and pushed
-  into every compaction block for **orientation** (not recall, not instructions). It is
-  append-mostly: each consolidation adds a short dated segment and compresses the oldest
-  segments only once the file exceeds `journeyTargetTokens`, so recent history stays detailed
-  and the section stays bounded. Like the topic files it does **not** roll back under `/tree`.
-
-Each worker is an **ordinary recorded pi session** in the global store
-(`~/.pi/agent/sessions`, under the project path) — open it in the session browser to see the
-exact input chunk, tool calls, and output. Transient handoff files live in
-`<project>/.memory/<sessionId>/.runs/`.
-
-### Cost tracking
-
-Every worker is a `pi` subprocess, so its spend is captured from pi's **built-in**
-`usage.cost.total` (reliable, already computed). The worker extension — *not* the model —
-accumulates that figure and hands it back via the run's cost file
-(`.memory/<session>/.runs/<runId>.cost.json`), alongside the existing observation IPC. The orchestrator
-folds each run into an `om.cost` ledger entry.
-
-- **Ephemeral-safe:** cost rides the result-file IPC, never a saved session log, so it works
-  even if a worker session is not persisted.
-- **Never rolls back:** the running total sums *all* `om.cost` entries across the whole
-  session (every branch), so real money spent does not decrease under `/tree` — the same
-  tier rule as the `.memory/` files.
-- **Surfaced** in the footer (`$0.000`, right of the gauges) and in `/om:status`
-  (`session cost: $X (N runs)`). Survives resume.
-
-## Commands
+Memory is enabled by default. Existing explicit off settings remain off.
 
 | Command | Effect |
 |---|---|
-| `/om`, `/om on`, `/om off` | The per-session on/off gate |
-| `/om:status` | Workers in flight, active observation count, next-observer progress, pool/consolidator state, topic-file count, journey size, context usage, **session cost**, last error |
-| `/om:compact` | Force a compaction now (ignores the threshold) |
-| `/om:consolidate` | Force a consolidation now (ignores the pool threshold) |
+| `/om`, `/om on`, `/om off` | Toggle or set capture for this session |
+| `/om:status` | Show effective provider/model names, data policy, worker state, coverage, costs, and errors |
+| `/om:compact` | Request compaction after the current turn settles |
+| `/om:consolidate` | Promote overflow without waiting for the pool threshold |
+
+Disabling memory cancels workers. Their slots remain reserved until their processes close. Shutdown and session navigation wait for cancellation to finish.
+
+## Data policy
+
+Observers receive conversation text, tool arguments, and tool results. Assistant thinking blocks are omitted from captured history. Recognizable credentials are redacted before worker transport and before provider requests. This includes bearer credentials, common secret fields, private keys, and several token formats.
+
+Redaction is best effort, not a guarantee that arbitrary secrets are absent. Use `/om off` before sensitive work. Disabling capture does not erase existing ledger records, topic files, or worker sessions.
+
+Workers send data to the explicitly configured providers. Startup notifications and `/om:status` show the effective provider/model names without showing conversation content. The `om.data-policy` ledger entry also records these selections for headless clients, before worker dispatch. Provider selection does not change automatically when a worker fails.
+
+Worker inputs and outputs remain ordinary local Pi session recordings under Pi's global session store. This package does not delete those recordings. Local storage does not mean inference is local: the configured provider controls where inference runs.
+
+Memory is historical evidence, never a new user instruction or authorization.
+
+## Coverage and compaction
+
+Observers run on `agent_start` and `turn_end`, subject to `observerConcurrency`. Dispatch reserves source entries but does not confirm coverage. Failed ranges become eligible for retry. Later successful ranges cannot hide an earlier gap.
+
+New `om.observations.recorded` entries retain the existing fields and add:
+
+```json
+{
+  "coverageVersion": 2,
+  "sourceEntryIds": ["source-a", "source-b"],
+  "coversUpToId": "source-b",
+  "observations": []
+}
+```
+
+An explicit successful tool call with zero observations still records completed coverage. Missing or malformed worker output does not. Source identifiers must describe an ordered, continuous range on the current branch.
+
+Automatic compaction runs after `agent_settled`. An observational summary can replace only a continuously covered prefix. If coverage is unknown, the hook delegates to Pi's native compactor instead of returning an empty summary or repeatedly cancelling compaction.
+
+Legacy observations remain readable. Legacy end markers do not prove continuous coverage, so old ranges can be observed again. Compaction conservatively includes ledger observations even when tombstones exist. This protects historical branches and legacy drops whose durable files cannot be verified. It can produce larger summaries and duplicate facts.
+
+## Consolidation receipts and publication
+
+Only one consolidator runs per runtime. It edits a private staging directory, not live topic files. After all edits, it must call `report_consolidation`:
+
+```json
+{
+  "receipts": [
+    {
+      "timestamp": "2026-11-05T10:00:00",
+      "path": "auth.md",
+      "quote": "Authentication uses short-lived tokens."
+    },
+    {
+      "timestamp": "2026-11-05T10:01:00",
+      "discardReason": "Repeated greeting without new facts"
+    }
+  ]
+}
+```
+
+The tool adds SHA-256 hashes. Each report replaces the preceding report. Persisted receipts require an exact quote in a flat Markdown filename. `INDEX.md` is reserved. An explicit discard requires a nonempty reason and no file fields.
+
+The orchestrator verifies receipts against the handed batch and staged files. It publishes only referenced files, verifies them again, writes provenance and the index, then appends tombstones. Exit zero and prose confirmation are not receipts. Unknown timestamps, changed files, missing receipts, cancellation, and stale lifecycle tokens cannot authorize tombstones.
+
+Publication uses atomic replacement per file, not a multi-file transaction. If publication fails partway, some files can change, but the observations remain available and no batch tombstone is appended. Receipts prove persistence of quoted text, not semantic completeness of a model summary.
+
+## Branches, persistence, and retention
+
+New durable roots use `.memory/<sessionId>-<scopeId>/`. The ledger stores `om.memory.scope`. A `.branch.json` file records the branch identifiers associated with published files.
+
+Tree navigation starts a new scope. Resume reuses a scope only when its provenance fits the selected branch. Historical forks do not copy the parent's current files. Ambiguous or legacy directories remain untouched but are not injected automatically. Ledger observations and raw session history remain available for reconstruction.
+
+Workers have a ten-minute deadline. Cancellation sends TERM, then KILL after three seconds unless the process has closed. POSIX workers use a separate process group. Windows uses child-process termination.
+
+After workers settle, retention keeps at most 100 recognized inactive IPC artifacts per scope, plus active artifacts. These include result files, cost files, and abandoned staging directories. Retention never deletes topic files, unknown files, or Pi session recordings.
+
+File tools reject symlink components and hidden paths. Writes use random exclusive temporary files with private permissions. These checks are not an OS sandbox against concurrent hostile ancestor replacement. The single-consolidator guard is process-local: do not open the same session scope for writing in multiple Pi processes.
 
 ## Configuration
 
-Namespace `observational-memory` in `~/.pi/agent/settings.json` (global) or
-`.pi/settings.json` (project; overrides global):
+Use the `observational-memory` namespace in global Pi settings or `.pi/settings.json`. Project model overrides inherit each omitted field from global settings. Existing explicit models, including `openai-codex/gpt-6-luna`, stay unchanged unless overridden explicitly.
 
-```jsonc
+```json
 {
   "observational-memory": {
-    "chunkTokens": 5000,
-    "chunkOverlapTokens": 0,
-    "poolTargetTokens": 10000,           // buffer drains back toward this after consolidation
-    "consolidateAtPoolTokens": 20000,    // pool size that triggers a consolidation (200% of target)
-    "compactAtContextTokens": 100000,    // tune per model
-    "tailTokens": 20000,                 // verbatim tail; snaps to a chunk boundary
-    "journeyTargetTokens": 1000,         // pushed JOURNEY.md size; compress oldest segments past this
+    "chunkTokens": 10000,
+    "poolTargetTokens": 10000,
+    "consolidateAtPoolTokens": 15000,
+    "compactAtContextTokens": 150000,
+    "tailTokens": 20000,
+    "journeyTargetTokens": 1000,
     "observerConcurrency": 4,
     "models": {
-      "observer":     { "provider": "anthropic", "id": "claude-sonnet-4-6", "thinking": "low" },
-      "consolidator": { "provider": "anthropic", "id": "claude-sonnet-4-6", "thinking": "medium" }
+      "observer": { "provider": "openai-codex", "id": "gpt-6-luna", "thinking": "high" },
+      "consolidator": { "provider": "openai-codex", "id": "gpt-6-luna", "thinking": "high" }
     },
-    "passive": false,
-    "debugLog": false
+    "passive": false
   }
 }
 ```
 
-`PI_OM_PASSIVE=1` forces `passive` (disables all triggers) for clean `/tree` testing.
-`passive` is a power-user setting distinct from the on/off gate.
+No configuration migration is required. This example does not change the package defaults: without explicit model settings, both roles still use `openrouter/z-ai/glm-5.3`. `PI_OM_PASSIVE=1` disables automatic triggers. `chunkOverlapTokens` remains zero in this implementation. Worker deadlines and retention limits are currently code constants, not new settings.
 
-## Development
+Cost reporting uses Pi usage metrics. Costs from invalidated workers are not appended to another branch, so displayed totals can undercount cancelled work. There is no monetary budget cap.
 
-Development dependencies and compatibility tests are pinned to Pi 0.85.1 and TypeBox 1.3.7.
-Public peers remain permissive, but this does not certify every Pi version. The obsolete
-Pi 0.85.0 `pi-server` packaging workaround is no longer needed.
+## Development and verification
 
 ```bash
-npm install
-npm test          # vitest
-npm run typecheck # tsc --noEmit
+npm run typecheck
+npm test
+PI_OM_TEST_HOST=/absolute/path/to/installed/pi-coding-agent node tests/pi15-lifecycle.mjs
 ```
 
-Layout: `src/` is the master-side orchestrator (entry `src/index.ts`); `agent/` is the shared
-worker extension loaded into subprocesses via `-e` (`OM_WORKER=observer|consolidator`).
-Long-term memory lives under `<project>/.memory/<sessionId>/` (`INDEX.md` + `<topic>.md` +
-`JOURNEY.md`), keyed by the immutable session-header id so sessions in the same project stay
-isolated; a fork seeds its dir from the parent's on first touch. Transient worker IPC lives
-under `<project>/.memory/<sessionId>/.runs/`.
+Development dependencies remain pinned to Pi 0.85.1 and TypeBox 1.3.7. The additional lifecycle probe uses the installed official Pi 1.5 loader, runner, and in-memory session manager. It isolates all settings and files in a temporary directory and makes no model calls.
+
+`tests/audit-integrity.test.ts` covers the audit regressions with synthetic fixtures and a local TERM-ignoring worker. The lifecycle probe checks registration, native-compaction fallback, covered summaries, tree invalidation, shutdown, receipt tools, and provider-payload redaction. Synthetic subprocesses also verify partial-publication failure, active-staging retention, deadlines, and stale compaction callbacks.

@@ -1,17 +1,17 @@
 /**
  * `.memory/` substrate (Phase B). The filesystem IS the long-term recall interface: the master
- * reads topic files with ordinary `ls`/`read`/`grep`. Topic files are NOT rolled back by `/tree`
- * (they track the repo, not the session branch).
+ * reads topic files with ordinary `ls`/`read`/`grep`. Lifecycle scope records separate branches.
  *
  * Layout under <project>/.memory/:
  *   INDEX.md            — orchestrator-owned; (re)rendered from topic front-matter
  *   <topic>.md          — consolidator-authored; YAML front-matter + current-state prose
- *   .runs/<id>.json     — transient worker IPC (not GC'd in v1)
+ *   .runs/<id>.json     — transient worker IPC (bounded retention)
  *
  * All writes are atomic (temp + rename) so a reader never sees a half-written file.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { closeSync, constants, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 export const INDEX_FILENAME = "INDEX.md";
 /**
@@ -33,6 +33,7 @@ export function memoryBaseDir(cwd: string): string {
  * (survives /name, /resume, /tree) — NOT the session filename or display name.
  */
 export function sessionMemoryRoot(cwd: string, sessionId: string): string {
+	if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error("Invalid session id");
 	return join(memoryBaseDir(cwd), sessionId);
 }
 
@@ -49,19 +50,57 @@ export function readJourney(root: string): string | undefined {
 	const path = journeyPath(root);
 	if (!existsSync(path)) return undefined;
 	try {
-		const body = readFileSync(path, "utf-8").trim();
+		const body = safeRead(path).trim();
 		return body.length > 0 ? body : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
-/** Atomic write (temp + rename). Creates parent dirs as needed. */
+export function assertNoSymlinks(path: string): void {
+	const abs = resolve(path);
+	let current = parse(abs).root;
+	for (const part of abs.slice(current.length).split(sep).filter(Boolean)) {
+		current = join(current, part);
+		try {
+			const stat = lstatSync(current);
+			if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw new Error("Unsafe memory path");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+}
+
+export function safeRead(path: string): string {
+	assertNoSymlinks(path);
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		const stat = fstatSync(fd);
+		if (!stat.isFile() || stat.nlink !== 1) throw new Error("Unsafe memory file");
+		return readFileSync(fd, "utf-8");
+	} finally { closeSync(fd); }
+}
+
 export function atomicWrite(path: string, content: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, content, "utf-8");
-	renameSync(tmp, path);
+	assertNoSymlinks(path);
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	assertNoSymlinks(path);
+	const tmp = join(dirname(path), `.om-tmp-${randomUUID()}`);
+	const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+	try {
+		try {
+			writeFileSync(fd, content, "utf-8");
+			fsyncSync(fd);
+		} finally { closeSync(fd); }
+		assertNoSymlinks(path);
+		renameSync(tmp, path);
+		if (process.platform !== "win32") {
+			const directory = openSync(dirname(path), constants.O_RDONLY | constants.O_NOFOLLOW);
+			try { fsyncSync(directory); } finally { closeSync(directory); }
+		}
+	} finally {
+		try { unlinkSync(tmp); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+	}
 }
 
 /**
@@ -73,8 +112,8 @@ export function resolveWithinMemory(root: string, requestedPath: string): string
 	const base = resolve(root);
 	const abs = resolve(base, requestedPath);
 	const rel = relative(base, abs);
-	if (rel === "" || rel === ".") return abs; // the session memory root itself
-	if (rel.startsWith("..") || resolve(base, rel) !== abs) return undefined;
+	if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
+	try { assertNoSymlinks(abs); } catch { return undefined; }
 	return abs;
 }
 
@@ -128,13 +167,14 @@ export function parseFrontMatter(content: string): { front: TopicFrontMatter; bo
  */
 export function listTopics(root: string): Topic[] {
 	if (!existsSync(root)) return [];
+	try { assertNoSymlinks(root); } catch { return []; }
 	const cwd = resolve(root, "..", "..");
 	const topics: Topic[] = [];
 	for (const filename of readdirSync(root)) {
 		if (!filename.endsWith(".md") || filename === INDEX_FILENAME || filename === JOURNEY_FILENAME) continue;
 		let content: string;
 		try {
-			content = readFileSync(join(root, filename), "utf-8");
+			content = safeRead(join(root, filename));
 		} catch {
 			continue;
 		}

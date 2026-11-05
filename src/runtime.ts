@@ -9,13 +9,24 @@ import { StatusController } from "./ui/status-controller.js";
 export class Runtime {
 	config: Config = { ...DEFAULTS };
 	configLoaded = false;
+	generation = 0;
+	sessionId = "";
+	branchId = "";
+
+	captureToken(): string {
+		return JSON.stringify([this.generation, this.sessionId, this.branchId, this.memoryRoot]);
+	}
+
+	isCurrent(token: string): boolean {
+		return this.enabled && token === this.captureToken();
+	}
 
 	/** The per-session on/off gate (default ON). Outermost guard in every handler. */
 	enabled = true;
 
 	/**
-	 * Absolute `.memory/<sessionId>/` root for this session's durable + transient memory. Set
-	 * whenever the gate is enabled (session_start / `/om on`) via `ensureSessionMemory`; empty
+	 * Absolute root for this session scope's durable and transient memory. Set
+	 * whenever the gate is enabled (session_start / `/om on`) via `selectMemoryScope`; empty
 	 * while disabled. All path helpers (listTopics/indexPath/readJourney/run*Path) take this root.
 	 */
 	memoryRoot = "";
@@ -26,7 +37,7 @@ export class Runtime {
 	 * the rendered block (an observer whose chunk lands entirely in the verbatim tail is excluded
 	 * from the projection regardless, so compaction need not wait for it).
 	 */
-	readonly observersInFlight = new Map<string, { controller: AbortController; coversUpToId: string }>();
+	readonly observersInFlight = new Map<string, { controller: AbortController; coversUpToId: string; sourceEntryIds?: string[] }>();
 
 	/** In-flight observer async tasks, so compaction can wait for settled memory state (design R5). */
 	readonly observerTasks = new Set<Promise<void>>();
@@ -38,19 +49,27 @@ export class Runtime {
 	 */
 	consolidatorInFlight = false;
 	consolidatorController: AbortController | undefined;
-
-	/**
-	 * coversUpToId of the most-recent chunk DISPATCHED (committed or still in flight). Combined
-	 * with the committed ledger watermark, this is the effective observation watermark: it keeps
-	 * parallel observers from re-selecting the same slice and lets zero-observation chunks (which
-	 * commit no ledger entry) still advance the clock. In-memory only — lost on resume (harmless;
-	 * worst case a chunk is re-observed).
-	 */
-	dispatchedCoversUpToId: string | undefined;
+	consolidatorTask: Promise<void> | undefined;
+	consolidatorRunId: string | undefined;
 
 	/** Guards so compaction trigger + hook never re-enter. */
 	compactInFlight = false;
 	compactHookInFlight = false;
+	private compactionOwner: symbol | undefined;
+
+	beginCompaction(): symbol {
+		const owner = Symbol("compaction");
+		this.compactionOwner = owner;
+		this.compactInFlight = true;
+		return owner;
+	}
+
+	finishCompaction(owner: symbol): boolean {
+		if (this.compactionOwner !== owner) return false;
+		this.compactionOwner = undefined;
+		this.compactInFlight = false;
+		return true;
+	}
 
 	/** Last worker error message, surfaced by /om:status. */
 	lastWorkerError: string | undefined;
@@ -135,16 +154,15 @@ export class Runtime {
 		this.status.setCost(costUsd, runs);
 	}
 
-	/** Abort and forget all in-flight workers (session shutdown / disable). */
+	/** Invalidate publication, then cancel workers without releasing their owned slots. */
 	abortAllWorkers(): void {
+		this.generation++;
 		this.cancelPendingToasts();
 		for (const { controller } of this.observersInFlight.values()) {
 			controller.abort();
 		}
-		this.observersInFlight.clear();
 		this.consolidatorController?.abort();
-		this.consolidatorController = undefined;
-		this.consolidatorInFlight = false;
+		// Owners retain their slots until their processes close, including after cancellation.
 	}
 
 	/** Track an observer task for the lifetime of its async run. */
@@ -153,10 +171,20 @@ export class Runtime {
 		void task.finally(() => this.observerTasks.delete(task));
 	}
 
+	async whenWorkersIdle(): Promise<void> {
+		await Promise.allSettled([...this.observerTasks, ...(this.consolidatorTask ? [this.consolidatorTask] : [])]);
+	}
+
 	/** Resolve once no observer tasks are in flight (compaction blocks on this). */
-	async whenObserversIdle(): Promise<void> {
-		while (this.observerTasks.size > 0) {
-			await Promise.allSettled([...this.observerTasks]);
+	async whenObserversIdle(signal?: AbortSignal): Promise<void> {
+		while (this.observerTasks.size > 0 && !signal?.aborted) {
+			let onAbort: (() => void) | undefined;
+			try {
+				await Promise.race([
+					Promise.allSettled([...this.observerTasks]),
+					new Promise<void>(resolve => { onAbort = () => resolve(); signal?.addEventListener("abort", onAbort, { once: true }); }),
+				]);
+			} finally { if (onAbort) signal?.removeEventListener("abort", onAbort); }
 		}
 	}
 

@@ -1,4 +1,5 @@
 import type { Message, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
+import { redactCredentials } from "../privacy.js";
 
 function pad(n: number): string {
 	return n.toString().padStart(2, "0");
@@ -76,7 +77,7 @@ export function serializeConversation(messages: Message[]): string {
 				return `[User @ ${time}]: ${textOnly(msg.content)}`;
 			}
 			if (msg.role === "assistant") {
-				const body = textAndPlaceholders(msg.content, { includeThinking: true })
+				const body = textAndPlaceholders(msg.content)
 					.split("\n")
 					.filter(Boolean)
 					.join("\n");
@@ -131,7 +132,7 @@ export function serializeBranchEntries(entries: RenderableEntry[]): string {
 			blocks.push(`[Branch summary @ ${time}]: ${entry.summary}`);
 		}
 	}
-	return blocks.join("\n\n");
+	return redactCredentials(blocks.join("\n\n"));
 }
 
 export type SourceAddressedSerialization = {

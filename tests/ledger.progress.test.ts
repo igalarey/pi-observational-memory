@@ -81,11 +81,11 @@ describe("ledger progress helpers", () => {
 			textCustomMessage("raw-4", "dddddddddddddddd"),
 		];
 
-		expect(rawTokensSinceObservationCoverage(entries)).toBe(9); // raw-2 + raw-3 + raw-4
+		expect(rawTokensSinceObservationCoverage(entries)).toBe(10); // Legacy records do not prove source coverage.
 		expect(rawTokensSinceDropCoverage(entries)).toBe(7); // raw-3 + raw-4
 	});
 
-	it("chooses the max covered branch position, not ledger order", () => {
+	it("does not infer continuous coverage from legacy end markers", () => {
 		const entries = [
 			textCustomMessage("raw-1", "aaaa"),
 			textCustomMessage("raw-2", "bbbbbbbb"),
@@ -94,10 +94,10 @@ describe("ledger progress helpers", () => {
 			textCustomMessage("raw-3", "cccccccccccc"),
 		];
 
-		expect(latestCoverageIndex(entries, OM_OBSERVATIONS_RECORDED)).toBe(1);
-		expect(latestCoverageMarkerId(entries, OM_OBSERVATIONS_RECORDED)).toBe("raw-2");
+		expect(latestCoverageIndex(entries, OM_OBSERVATIONS_RECORDED)).toBe(-1);
+		expect(latestCoverageMarkerId(entries, OM_OBSERVATIONS_RECORDED)).toBeUndefined();
 		expect(latestCoverageIndex(entries, OM_OBSERVATIONS_DROPPED)).toBe(-1);
-		expect(rawTokensSinceObservationCoverage(entries)).toBe(3);
+		expect(rawTokensSinceObservationCoverage(entries)).toBe(6);
 	});
 
 	it("compares coverage markers by branch index", () => {

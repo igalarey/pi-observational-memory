@@ -1,24 +1,24 @@
 /**
  * The consolidator's tool belt. `--no-builtin-tools` is set on the worker, so this extension
  * registers its own read/write/edit/ls/grep — all path-scoped to `.memory/` (design risk 6).
- * There is no result file: the file edits ARE the output, and the run ends by natural exit
- * of `pi -p` once the model emits its closing confirmation. The orchestrator then tombstones
- * the whole provided batch (it already knows exactly what it handed over).
+ * Edits stay in staging until the orchestrator verifies report_consolidation receipts.
  *
  * Scoping: every path argument is resolved against OM_MEMORY_DIR and rejected if it escapes
  * that directory, so a wayward model cannot read or clobber the user's project.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { Static } from "typebox";
-import { atomicWrite } from "../../src/memory/paths.js";
+import { atomicWrite, resolveWithinMemory, safeRead } from "../../src/memory/paths.js";
+import { fileDigest, verifyReceipts } from "../../src/memory/receipt.js";
+import { redactCredentials } from "../../src/privacy.js";
 
 type ToolText = { content: { type: "text"; text: string }[]; details: unknown };
 
 function ok(text: string, details: unknown = {}): ToolText {
-	return { content: [{ type: "text" as const, text }], details };
+	return { content: [{ type: "text" as const, text: redactCredentials(text) }], details };
 }
 
 function fail(text: string): ToolText {
@@ -27,10 +27,8 @@ function fail(text: string): ToolText {
 
 /** Resolve a requested path against the sandbox root, or return undefined if it escapes. */
 function scoped(root: string, requested: string): string | undefined {
-	const abs = resolve(root, requested);
-	const rel = relative(root, abs);
-	if (rel === "") return abs;
-	if (rel.startsWith("..")) return undefined;
+	const abs = resolveWithinMemory(root, requested);
+	if (!abs || relative(root, abs).split(/[\\/]/).some(part => part.startsWith("."))) return undefined;
 	return abs;
 }
 
@@ -65,15 +63,38 @@ function listFilesRecursive(dir: string): string[] {
 	for (const name of readdirSync(dir)) {
 		if (name.startsWith(".")) continue; // skip .runs and temp files
 		const full = join(dir, name);
-		if (statSync(full).isDirectory()) out.push(...listFilesRecursive(full));
-		else out.push(full);
+		const stat = lstatSync(full);
+		if (stat.isSymbolicLink()) continue;
+		if (stat.isDirectory()) out.push(...listFilesRecursive(full));
+		else if (stat.isFile() && stat.nlink === 1) out.push(full);
 	}
 	return out;
 }
 
 /** Register the consolidator's scoped file tools (read/write/edit/ls/grep), all under .memory/. */
-export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string): void {
+export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string, resultPath?: string): void {
 	const root = resolve(memoryRoot);
+	if (resultPath) {
+		pi.registerTool({
+			name: "report_consolidation",
+			label: "Report consolidation",
+			description: "Report each observation preserved in a file with an exact quote, or explicitly discarded with a reason. Call after all edits.",
+			parameters: Type.Object({ receipts: Type.Array(Type.Object({
+				timestamp: Type.String(), path: Type.Optional(Type.String()), quote: Type.Optional(Type.String()), discardReason: Type.Optional(Type.String()),
+			})) }),
+			async execute(_id, params) {
+				const receipts = params.receipts.map(receipt => {
+					if (!receipt.path) return receipt;
+					const path = scoped(root, receipt.path);
+					if (!path) throw new Error("Unsafe receipt path");
+					return { ...receipt, sha256: fileDigest(safeRead(path)) };
+				});
+				const verified = verifyReceipts(root, receipts);
+				atomicWrite(resultPath, JSON.stringify({ receipts: verified }));
+				return ok(`Recorded ${verified.length} receipts.`);
+			},
+		});
+	}
 
 	pi.registerTool({
 		name: "read",
@@ -84,7 +105,7 @@ export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string):
 			const abs = scoped(root, params.path);
 			if (!abs) return fail("path escapes .memory/");
 			if (!existsSync(abs)) return fail(`no such file: ${params.path}`);
-			return ok(readFileSync(abs, "utf-8"));
+			return ok(safeRead(abs));
 		},
 	});
 
@@ -112,7 +133,7 @@ export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string):
 			if (!abs) return fail("path escapes .memory/");
 			if (/(^|\/)INDEX\.md$/i.test(params.path)) return fail("INDEX.md is generated automatically; do not edit it");
 			if (!existsSync(abs)) return fail(`no such file: ${params.path}`);
-			const current = readFileSync(abs, "utf-8");
+			const current = safeRead(abs);
 			const occurrences = current.split(params.oldText).length - 1;
 			if (occurrences === 0) return fail("oldText not found");
 			if (occurrences > 1) return fail(`oldText is ambiguous (${occurrences} matches); add more context`);
@@ -150,10 +171,10 @@ export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string):
 			const base = scoped(root, params.path ?? ".");
 			if (!base) return fail("path escapes .memory/");
 			if (!existsSync(base)) return ok("(no matches)");
-			const files = statSync(base).isDirectory() ? listFilesRecursive(base) : [base];
+			const files = lstatSync(base).isDirectory() ? listFilesRecursive(base) : [base];
 			const hits: string[] = [];
 			for (const file of files) {
-				const lines = readFileSync(file, "utf-8").split("\n");
+				const lines = safeRead(file).split("\n");
 				const relPath = relative(root, file);
 				lines.forEach((line, i) => {
 					if (re.test(line)) hits.push(`${relPath}:${i + 1}: ${line.trim()}`);

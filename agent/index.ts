@@ -15,6 +15,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { trackWorkerCost } from "./cost.js";
+import { redactPayload } from "../src/privacy.js";
 import { CONSOLIDATOR_SYSTEM } from "./consolidator/prompt.js";
 import { registerConsolidatorTools } from "./consolidator/tools.js";
 import { OBSERVER_SYSTEM } from "./observer/prompt.js";
@@ -27,6 +28,7 @@ export default function omWorker(pi: ExtensionAPI): void {
 	// Shared across roles: pull pi's built-in cost and hand it back via the cost file.
 	// Registered first so it writes the cost file before each role's agent_end shutdown.
 	trackWorkerCost(pi);
+	pi.on("before_provider_request", event => redactPayload(event.payload));
 
 	if (role === "observer") {
 		if (!resultPath) throw new Error("OM_RESULT_PATH not set for observer worker");
@@ -46,9 +48,8 @@ export default function omWorker(pi: ExtensionAPI): void {
 	if (role === "consolidator") {
 		const memoryRoot = process.env.OM_MEMORY_DIR;
 		if (!memoryRoot) throw new Error("OM_MEMORY_DIR not set for consolidator worker");
-		// No result file: the consolidator's output is its .memory/ edits, and the orchestrator
-		// tombstones the whole provided batch on clean exit (it knows what it handed over).
-		registerConsolidatorTools(pi, memoryRoot);
+		if (!resultPath) throw new Error("OM_RESULT_PATH not set for consolidator worker");
+		registerConsolidatorTools(pi, memoryRoot, resultPath);
 
 		pi.on("before_agent_start", async () => {
 			return { systemPrompt: CONSOLIDATOR_SYSTEM };

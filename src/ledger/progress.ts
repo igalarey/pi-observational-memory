@@ -4,6 +4,7 @@ import {
 	OM_OBSERVATIONS_RECORDED,
 	type Entry,
 	type MemoryCustomType,
+	isObservationsRecordedEntry,
 } from "./types.js";
 
 const SOURCE_ENTRY_TYPES = new Set(["message", "custom_message", "branch_summary"]);
@@ -65,7 +66,35 @@ function isValidCoverageEntry(entry: Entry, customType: MemoryCustomType): entry
 	return isNonEmptyArray(entry.data.observationTimestamps);
 }
 
+export function completedSourceIds(entries: Entry[]): Set<string> {
+	const sources = entries.filter(isSourceEntry);
+	const indexes = entryIndexById(entries);
+	const covered = new Set<string>();
+	for (const entry of entries) {
+		if (!isObservationsRecordedEntry(entry) || entry.data.coverageVersion !== 2) continue;
+		const ids = entry.data.sourceEntryIds;
+		if (!Array.isArray(ids) || !ids.length || !ids.every(id => typeof id === "string") || ids.at(-1) !== entry.data.coversUpToId) continue;
+		const start = sources.findIndex(source => source.id === ids[0]);
+		if (start < 0 || ids.some((id, i) => sources[start + i]?.id !== id)) continue;
+		if ((indexes.get(ids.at(-1)!) ?? Infinity) >= (indexes.get(entry.id) ?? -1)) continue;
+		for (const id of ids) covered.add(id);
+	}
+	return covered;
+}
+
+export function contiguousCoverageIndex(entries: Entry[]): number {
+	const covered = completedSourceIds(entries);
+	let boundary = -1;
+	for (let i = 0; i < entries.length; i++) {
+		if (!isSourceEntry(entries[i])) continue;
+		if (!covered.has(entries[i].id)) break;
+		boundary = i;
+	}
+	return boundary;
+}
+
 export function latestCoverageIndex(entries: Entry[], customType: MemoryCustomType): number {
+	if (customType === OM_OBSERVATIONS_RECORDED) return contiguousCoverageIndex(entries);
 	const idToIndex = entryIndexById(entries);
 	let latest = -1;
 
@@ -80,6 +109,7 @@ export function latestCoverageIndex(entries: Entry[], customType: MemoryCustomTy
 }
 
 export function latestCoverageMarkerId(entries: Entry[], customType: MemoryCustomType): string | undefined {
+	if (customType === OM_OBSERVATIONS_RECORDED) return entries[contiguousCoverageIndex(entries)]?.id;
 	const idToIndex = entryIndexById(entries);
 	let latestIndex = -1;
 	let latestMarkerId: string | undefined;

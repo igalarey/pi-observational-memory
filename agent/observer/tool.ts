@@ -36,9 +36,6 @@ export function registerObserverTool(pi: ExtensionAPI, resultPath: string): void
 		writeObserverResult(resultPath, { observations: accumulated });
 	}
 
-	// Ensure a valid (possibly empty) result file exists even for zero-observation chunks.
-	flush();
-
 	pi.registerTool({
 		name: "record_observations",
 		label: "Record observations",

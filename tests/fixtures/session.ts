@@ -135,7 +135,7 @@ export function observation(timestamp: string, overrides: Partial<TestObservatio
 
 export function observationsRecordedEntry(
 	id: string,
-	args: { observations: TestObservation[]; coversUpToId: string },
+	args: { observations: TestObservation[]; coversUpToId: string; sourceEntryIds?: string[]; coverageVersion?: 2 },
 	overrides: Partial<TestEntry> = {},
 ): TestEntry {
 	return {

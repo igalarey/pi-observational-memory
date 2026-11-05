@@ -108,7 +108,7 @@ describe("observer result IPC round-trip", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("writes and reads back valid observations, dropping malformed ones", () => {
+	it("rejects partially malformed results instead of asserting complete coverage", () => {
 		const path = join(dir, "r.result.json");
 		writeObserverResult(path, {
 			observations: [
@@ -116,8 +116,7 @@ describe("observer result IPC round-trip", () => {
 				{ timestamp: "2026-06-25 14:31", content: "  " }, // dropped: blank content
 			],
 		});
-		const result = readObserverResult(path);
-		expect(result.observations).toEqual([{ timestamp: "2026-06-25 14:30", content: "ok" }]);
+		expect(() => readObserverResult(path)).toThrow("Invalid observation result");
 	});
 
 	it("throws on a result file missing the observations array", () => {
@@ -136,12 +135,14 @@ describe("registerObserverTool", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("writes an empty result file on registration and accumulates across calls", async () => {
+	it("requires an explicit tool call, accepts empty observations, and accumulates across calls", async () => {
 		const path = join(dir, "r.result.json");
 		let tool: any;
 		const fakePi = { registerTool: (def: any) => (tool = def) } as any;
 
 		registerObserverTool(fakePi, path);
+		expect(() => readObserverResult(path)).toThrow();
+		await tool.execute("empty", { observations: [] });
 		expect(readObserverResult(path).observations).toEqual([]);
 
 		await tool.execute("id1", { observations: [{ timestamp: "2026-06-25 14:30", content: "first" }] });
