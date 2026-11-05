@@ -2,18 +2,40 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { renderMemoryMap } from "../memory/index-render.js";
 import { listTopics, readJourney } from "../memory/paths.js";
 import type { Runtime } from "../runtime.js";
+import { verifyReceipts } from "../memory/receipt.js";
 import {
 	buildCompactionProjection,
 	contiguousCoverageIndex,
 	OM_OBSERVATIONS_DROPPED,
 	entryIndexById,
 	isObservationsRecordedEntry,
+	isObservationsDroppedEntry,
 	isSourceEntry,
 	isValidCutPoint,
 	rawTokensAfterIndex,
 	renderSummary,
 	type Entry,
 } from "../ledger/index.js";
+
+function usableTombstones(branch: Entry[], runtime: Runtime): Set<string> {
+	const dropped = new Set<string>();
+	if (!runtime.sessionId || !runtime.branchId) return dropped;
+	for (const entry of branch) {
+		if (!isObservationsDroppedEntry(entry)) continue;
+		const data = entry.data;
+		if (data.sessionId !== runtime.sessionId || data.scopeId !== runtime.branchId || !Array.isArray(data.receipts)) continue;
+		const declared = new Set(data.observationTimestamps);
+		for (const receipt of data.receipts) {
+			try {
+				const [verified] = verifyReceipts(runtime.memoryRoot, [receipt]);
+				if (declared.has(verified.timestamp)) dropped.add(verified.timestamp);
+			} catch {
+				// Recover only this observation when its persisted representation cannot be verified.
+			}
+		}
+	}
+	return dropped;
+}
 
 /** Distinct, branch-resolved coversUpToId indices of committed observation chunks, ascending. */
 function chunkBoundaryIndices(branch: Entry[]): number[] {
@@ -152,14 +174,28 @@ export function registerCompactionHook(pi: ExtensionAPI, runtime: Runtime): void
 			if (!runtime.isCurrent(token) || event.signal?.aborted) return { cancel: true };
 			if (snap.tail === undefined) return undefined;
 			const snapped = snap.firstKeptId;
-			// Ledger evidence remains available when legacy drops or historical branches lack durable files.
 			const projection = buildCompactionProjection(branch.filter(entry => entry.customType !== OM_OBSERVATIONS_DROPPED), snapped);
+			const dropped = usableTombstones(branch, runtime);
+			projection.observations = projection.observations.filter(observation => !dropped.has(observation.timestamp));
+			projection.details.observations = projection.observations;
 			// Phase B: render the long-term tier live from disk, regenerated each compaction
 			// (throwaway projections — cannot decay). The journey is the running descriptive history
 			// the consolidator maintains; the map is the topic-file index.
 			const journey = readJourney(runtime.memoryRoot);
 			const map = renderMemoryMap(listTopics(runtime.memoryRoot));
 			const summary = renderSummary(journey, map, projection.observations) || "The covered conversation prefix was reviewed and contained no retained observations.";
+			const window = ctx.model?.contextWindow;
+			const contextLimit = typeof window === "number" && Number.isFinite(window) && window > 0
+				? Math.min(window, runtime.config.compactAtContextTokens) : runtime.config.compactAtContextTokens;
+			const configuredReserve = event.preparation.settings?.reserveTokens;
+			const reserve = typeof configuredReserve === "number" && Number.isFinite(configuredReserve)
+				? Math.max(4096, configuredReserve) : 4096;
+			const budget = Math.min(
+				4 * (runtime.config.poolTargetTokens + runtime.config.journeyTargetTokens + 2048),
+				contextLimit - snap.tail - reserve,
+			);
+			// The pool-based byte cap bounds growth; context headroom uses the stricter one-byte-per-token bound.
+			if (Buffer.byteLength(summary, "utf8") > budget) return undefined;
 
 			return {
 				compaction: {

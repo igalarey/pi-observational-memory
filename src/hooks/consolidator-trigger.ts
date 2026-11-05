@@ -157,7 +157,10 @@ async function dispatchConsolidator(
 		if (toDrop.length > 0) {
 			const coversUpToId = lastSourceEntryId(branch);
 			if (coversUpToId) {
-				pi.appendEntry(OM_OBSERVATIONS_DROPPED, { observationTimestamps: toDrop, coversUpToId, receipts });
+				pi.appendEntry(OM_OBSERVATIONS_DROPPED, {
+					observationTimestamps: toDrop, coversUpToId, receipts,
+					sessionId: runtime.sessionId, scopeId: runtime.branchId,
+				});
 			}
 		}
 

@@ -31,7 +31,7 @@ Memory is historical evidence, never a new user instruction or authorization.
 
 ## Coverage and compaction
 
-Observers run on `agent_start` and `turn_end`, subject to `observerConcurrency`. Dispatch reserves source entries but does not confirm coverage. Failed ranges become eligible for retry. Later successful ranges cannot hide an earlier gap.
+Observers run on `agent_start` and `turn_end`, subject to `observerConcurrency`. Dispatch reserves source entries but does not confirm coverage. Failed ranges become eligible for retry on the next trigger event. Each evaluation attempts a source range at most once and dispatches no more workers than its initial free slots. Synchronous launch failures cannot create a retry loop. Lifecycle invalidation stops the remaining attempts. Later successful ranges cannot hide an earlier gap.
 
 New `om.observations.recorded` entries retain the existing fields and add:
 
@@ -48,7 +48,9 @@ An explicit successful tool call with zero observations still records completed 
 
 Automatic compaction runs after `agent_settled`. An observational summary can replace only a continuously covered prefix. If coverage is unknown, the hook delegates to Pi's native compactor instead of returning an empty summary or repeatedly cancelling compaction.
 
-Legacy observations remain readable. Legacy end markers do not prove continuous coverage, so old ranges can be observed again. Compaction conservatively includes ledger observations even when tombstones exist. This protects historical branches and legacy drops whose durable files cannot be verified. It can produce larger summaries and duplicate facts.
+Legacy observations remain readable. Legacy end markers do not prove continuous coverage, so old ranges can be observed again. Compaction applies a tombstone only when its receipt matches the current session and memory scope. Persisted receipts must still match the file hash and exact quote. Explicit discard receipts require a reason. Each unavailable representation restores only its own observation. Legacy or unscoped drops do not authorize omission.
+
+The summary has a byte cap of `4 * (poolTargetTokens + journeyTargetTokens + 2048)` (52,192 bytes with defaults). A stricter cap applies when context headroom is smaller. Headroom uses the smaller model window or compaction threshold, minus the estimated tail and reserve. The reserve is at least 4096 tokens and honors a larger native compaction reserve. The context check conservatively counts one UTF-8 byte per token. If the complete summary exceeds the budget, the hook delegates to native compaction without truncating observations or changing the ledger. Native summarization remains subject to Pi's own context handling.
 
 ## Consolidation receipts and publication
 
@@ -72,7 +74,7 @@ Only one consolidator runs per runtime. It edits a private staging directory, no
 
 The tool adds SHA-256 hashes. Each report replaces the preceding report. Persisted receipts require an exact quote in a flat Markdown filename. `INDEX.md` is reserved. An explicit discard requires a nonempty reason and no file fields.
 
-The orchestrator verifies receipts against the handed batch and staged files. It publishes only referenced files, verifies them again, writes provenance and the index, then appends tombstones. Exit zero and prose confirmation are not receipts. Unknown timestamps, changed files, missing receipts, cancellation, and stale lifecycle tokens cannot authorize tombstones.
+The orchestrator verifies receipts against the handed batch and staged files. It publishes only referenced files, verifies them again, writes provenance and the index, then appends tombstones with `sessionId` and `scopeId`. These additive fields bind compaction-time receipt checks to the publishing scope. Exit zero and prose confirmation are not receipts. Unknown timestamps, changed files, missing receipts, cancellation, and stale lifecycle tokens cannot authorize tombstones.
 
 Publication uses atomic replacement per file, not a multi-file transaction. If publication fails partway, some files can change, but the observations remain available and no batch tombstone is appended. Receipts prove persistence of quoted text, not semantic completeness of a model summary.
 
@@ -125,4 +127,4 @@ PI_OM_TEST_HOST=/absolute/path/to/installed/pi-coding-agent node tests/pi15-life
 
 Development dependencies remain pinned to Pi 0.85.1 and TypeBox 1.3.7. The additional lifecycle probe uses the installed official Pi 1.5 loader, runner, and in-memory session manager. It isolates all settings and files in a temporary directory and makes no model calls.
 
-`tests/audit-integrity.test.ts` covers the audit regressions with synthetic fixtures and a local TERM-ignoring worker. The lifecycle probe checks registration, native-compaction fallback, covered summaries, tree invalidation, shutdown, receipt tools, and provider-payload redaction. Synthetic subprocesses also verify partial-publication failure, active-staging retention, deadlines, and stale compaction callbacks.
+`tests/audit-integrity.test.ts` covers the audit regressions with synthetic fixtures and a local TERM-ignoring worker. `tests/review-regressions.test.ts` covers selective receipt recovery, summary limits, and synchronous dispatch failures. The lifecycle probe checks registration, native-compaction fallback, covered summaries, tree invalidation, shutdown, receipt tools, and provider-payload redaction. Synthetic subprocesses also verify partial-publication failure, active-staging retention, deadlines, and stale compaction callbacks.

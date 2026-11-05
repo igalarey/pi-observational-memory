@@ -63,6 +63,9 @@ export type ObservationsRecordedEntryData = {
 };
 
 export type ObservationsDroppedEntryData = {
+	sessionId?: string;
+	scopeId?: string;
+	receipts?: unknown[];
 	observationTimestamps: string[];
 	coversUpToId: string;
 };

@@ -50,8 +50,9 @@ function nextRunId(): string {
 	return `obs-${stamp}-${process.pid}-${runCounter}-${randomUUID()}`;
 }
 
-function pendingSources(runtime: Runtime, branch: Entry[]): Entry[] {
+function pendingSources(runtime: Runtime, branch: Entry[], attempted: Set<string>): Entry[] {
 	const reserved = completedSourceIds(branch);
+	for (const id of attempted) reserved.add(id);
 	for (const run of runtime.observersInFlight.values()) {
 		for (const id of run.sourceEntryIds ?? []) reserved.add(id);
 	}
@@ -78,10 +79,13 @@ export function evaluateObserverTriggers(pi: ExtensionAPI, runtime: Runtime, ctx
 	// notify after the loop. Firing inside the loop would cause pi's showStatus() to
 	// replace the previous line — only the last toast would survive.
 	const startToastLines: string[] = [];
+	const attempted = new Set<string>();
+	const token = runtime.captureToken();
+	let attemptsLeft = runtime.observerSlotsAvailable;
 
-	while (runtime.observerSlotsAvailable > 0) {
+	while (runtime.isCurrent(token) && runtime.observerSlotsAvailable > 0 && attemptsLeft-- > 0) {
 		const branch = sessionManager.getBranch();
-		const pending = pendingSources(runtime, branch);
+		const pending = pendingSources(runtime, branch, attempted);
 		const remaining = rawTokensAfterIndex(pending, -1);
 		// Use break (not return) so execution always reaches the post-loop notify.
 		// A return here would exit the function before the batched start-toast fires.
@@ -92,6 +96,7 @@ export function evaluateObserverTriggers(pi: ExtensionAPI, runtime: Runtime, ctx
 		const slice = selectSourceSlice(pending, undefined, runtime.config.chunkTokens);
 		if (slice.entries.length === 0 || !slice.coversUpToId) break;
 
+		for (const entry of slice.entries) attempted.add(entry.id);
 		runtime.trackObserverTask(
 			dispatchObserver(pi, runtime, { hasUI, ui, sessionManager, getContextUsage: ctx.getContextUsage }, slice),
 		);
