@@ -145,11 +145,12 @@ function readNamespacedConfig(path: string, base: Config): Partial<Config> {
 	}
 }
 
-export function loadConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(cwd: string, env: NodeJS.ProcessEnv = process.env, options: { allowProjectConfig?: boolean } = {}): Config {
 	const globalPath = join(getAgentDir(), "settings.json");
 	const projectPath = join(cwd, ".pi", "settings.json");
 	const globalConfig = readNamespacedConfig(globalPath, DEFAULTS);
-	const projectConfig = readNamespacedConfig(projectPath, { ...DEFAULTS, ...globalConfig });
+	const projectConfig = options.allowProjectConfig === true
+		? readNamespacedConfig(projectPath, { ...DEFAULTS, ...globalConfig }) : {};
 	const envConfig = readEnvConfig(env);
 	return {
 		...DEFAULTS,

@@ -92,7 +92,7 @@ File tools reject symlink components and hidden paths. Writes use random exclusi
 
 ## Configuration
 
-Use the `observational-memory` namespace in global Pi settings or `.pi/settings.json`. Project model overrides inherit each omitted field from global settings. Existing explicit models, including `openai-codex/gpt-6-luna`, stay unchanged unless overridden explicitly.
+Use the `observational-memory` namespace in global Pi settings or a trusted project's `.pi/settings.json`. Project settings apply only when Pi explicitly reports project trust; older hosts without that signal use global settings. Project model overrides inherit each omitted field from global settings. Existing explicit models, including `openai-codex/gpt-6-luna`, stay unchanged unless overridden explicitly in an authorized scope.
 
 ```json
 {

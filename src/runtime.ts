@@ -124,9 +124,11 @@ export class Runtime {
 		this.pendingInfoToastLines = [];
 	}
 
-	ensureConfig(cwd: string): void {
+	ensureConfig(cwd: string, context?: unknown): void {
 		if (this.configLoaded) return;
-		this.config = loadConfig(cwd);
+		const trustContext = context as { isProjectTrusted?: () => boolean } | undefined;
+		const allowProjectConfig = typeof trustContext?.isProjectTrusted === "function" && trustContext.isProjectTrusted() === true;
+		this.config = loadConfig(cwd, process.env, { allowProjectConfig });
 		this.configLoaded = true;
 	}
 

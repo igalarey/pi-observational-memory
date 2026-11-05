@@ -148,7 +148,7 @@ export function registerCompactionHook(pi: ExtensionAPI, runtime: Runtime): void
 		runtime.compactHookInFlight = true;
 		const token = runtime.captureToken();
 		try {
-			runtime.ensureConfig(ctx.cwd);
+			runtime.ensureConfig(ctx.cwd, ctx);
 			const tailTokens = runtime.config.tailTokens;
 			const { firstKeptEntryId, tokensBefore } = event.preparation;
 

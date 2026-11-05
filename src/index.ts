@@ -60,7 +60,7 @@ export default function observationalMemory(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event: unknown, ctx: any) => {
 		runtime.abortAllWorkers();
 		runtime.configLoaded = false;
-		runtime.ensureConfig(ctx.cwd);
+		runtime.ensureConfig(ctx.cwd, ctx);
 		const branch = ctx.sessionManager.getBranch() as Entry[];
 		runtime.enabled = readGateFromLedger(branch);
 		if (runtime.enabled) { setMemoryScope(ctx); announcePolicy(ctx); }

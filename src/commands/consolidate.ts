@@ -19,7 +19,7 @@ export function registerConsolidateCommand(pi: ExtensionAPI, runtime: Runtime): 
 				if (ctx.hasUI) ctx.ui.notify("om: consolidation already in progress", "warning");
 				return;
 			}
-			runtime.ensureConfig(ctx.cwd);
+			runtime.ensureConfig(ctx.cwd, ctx);
 			const branch = ctx.sessionManager.getBranch() as Entry[];
 			const active = foldLedger(branch).activeObservations;
 			const { promote } = selectPromotionOverflow(active, runtime.config.poolTargetTokens);

@@ -16,7 +16,7 @@ export function registerStatusCommand(pi: ExtensionAPI, runtime: Runtime): void 
 				ctx.ui.notify("om is off (use /om on to enable)", "info");
 				return;
 			}
-			runtime.ensureConfig(ctx.cwd);
+			runtime.ensureConfig(ctx.cwd, ctx);
 			const branch = ctx.sessionManager.getBranch() as Entry[];
 			const folded = foldLedger(branch);
 			const sinceObservation = rawTokensSinceObservationCoverage(branch);

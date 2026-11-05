@@ -128,14 +128,18 @@ it("retention only removes known inactive IPC files", () => {
  expect(readFileSync(join(dir, "user-notes.md"), "utf8")).toBe("KEEP");
  expect(readdirSync(dir).length).toBeLessThanOrEqual(12);
 });
-it("partial project models inherit each global field", () => {
+it("untrusted project models are ignored and trusted overrides inherit global fields", () => {
  const agent = join(root, "agent"); mkdirSync(agent);
  vi.stubEnv("PI_CODING_AGENT_DIR", agent);
  const models = { observer: { provider: "private", id: "one", thinking: "high" }, consolidator: { provider: "private", id: "two", thinking: "high" } };
  writeFileSync(join(agent, "settings.json"), JSON.stringify({ "observational-memory": { models } }));
  mkdirSync(join(root, ".pi"));
  writeFileSync(join(root, ".pi/settings.json"), JSON.stringify({ "observational-memory": { models: { observer: { id: "override" } } } }));
- expect(loadConfig(root, {}).models).toEqual({ ...models, observer: { ...models.observer, id: "override" } });
+ expect(loadConfig(root, {}).models).toEqual(models);
+ const runtime = new Runtime();
+ runtime.ensureConfig(root, { isProjectTrusted: () => false });
+ expect(runtime.config.models).toEqual(models);
+ expect(loadConfig(root, {}, { allowProjectConfig: true }).models).toEqual({ ...models, observer: { ...models.observer, id: "override" } });
 });
 it("rejects symlink components for every scoped operation and recursive grep", async () => {
  const memory = join(root, "memory"), outside = join(root, "outside"); mkdirSync(memory); mkdirSync(outside);
