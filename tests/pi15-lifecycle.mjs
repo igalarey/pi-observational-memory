@@ -15,7 +15,7 @@ mkdirSync(process.env.PI_CODING_AGENT_DIR);
 writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "settings.json"), JSON.stringify({ "observational-memory": { models: {
  observer: { provider: "synthetic", id: "observer" }, consolidator: { provider: "synthetic", id: "consolidator" },
 } } }));
-const source = resolve(import.meta.dirname, "..");
+const source = process.env.PI_OM_TEST_SOURCE ? resolve(process.env.PI_OM_TEST_SOURCE) : resolve(import.meta.dirname, "..");
 let checks = 0;
 const check = (actual, expected) => { assert.deepEqual(actual, expected); checks++; };
 try {
@@ -70,7 +70,10 @@ try {
  const payload = await workerRunner.emitBeforeProviderRequest({ messages: [{ content: "Authorization: Bearer synthetic-secret" }] });
  assert.ok(!JSON.stringify(payload).includes("synthetic-secret")); checks++;
  const { createJiti } = await import(pathToFileURL(join(host, "node_modules/jiti/lib/jiti.mjs")));
- const jiti = createJiti(import.meta.url, { fsCache: false });
+ const jiti = createJiti(import.meta.url, { fsCache: false, alias: {
+  "@earendil-works/pi-coding-agent": join(host, "dist/index.js"),
+  "typebox": join(host, "node_modules/typebox/build/index.mjs"),
+ } });
  const { Runtime } = await jiti.import(join(source, "src/runtime.ts"));
  const { evaluateConsolidatorTrigger } = await jiti.import(join(source, "src/hooks/consolidator-trigger.ts"));
  const { evaluateCompactionTrigger } = await jiti.import(join(source, "src/hooks/compaction-trigger.ts"));
