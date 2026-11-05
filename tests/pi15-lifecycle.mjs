@@ -72,6 +72,7 @@ try {
  const { createJiti } = await import(pathToFileURL(join(host, "node_modules/jiti/lib/jiti.mjs")));
  const jiti = createJiti(import.meta.url, { fsCache: false, alias: {
   "@earendil-works/pi-coding-agent": join(host, "dist/index.js"),
+  "@earendil-works/pi-tui": join(host, "node_modules/@earendil-works/pi-tui/dist/index.js"),
   "typebox": join(host, "node_modules/typebox/build/index.mjs"),
  } });
  const { Runtime } = await jiti.import(join(source, "src/runtime.ts"));
