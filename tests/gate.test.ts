@@ -31,7 +31,10 @@ describe("per-session gate", () => {
 
 	it.each([true, false])("preserves memory and commands through lifecycle events (hidden=%s)", async (hidden) => {
 		const root = mkdtempSync(join(tmpdir(), "om-status-gate-"));
-		const handlers = new Map<string, any>();
+		const handlers = new Map<string, Array<(event: unknown, ctx: any) => unknown>>();
+		const emit = async (name: string, ctx?: unknown) => {
+			for (const handler of handlers.get(name) ?? []) await handler({}, ctx);
+		};
 		const commands = new Map<string, any>();
 		const branch: Entry[] = [rawMessage("a", "Synthetic conversation text")];
 		const ui = {
@@ -51,7 +54,7 @@ describe("per-session gate", () => {
 				return { code: 1, signal: null, stderr: "synthetic failure" };
 			});
 			observationalMemory({
-				on: (name: string, handler: any) => handlers.set(name, handler),
+				on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
 				registerCommand: (name: string, command: any) => commands.set(name, command),
 				appendEntry: (customType: string, data: unknown) => branch.push({ type: "custom", id: `entry-${branch.length}`, customType, data }),
 			} as any);
@@ -59,17 +62,17 @@ describe("per-session gate", () => {
 				cwd: root, mode: "tui", hasUI: true, ui,
 				sessionManager: { getBranch: () => branch, getEntries: () => branch, getSessionId: () => "synthetic-session" },
 			};
-			await handlers.get("session_start")({}, ctx);
+			await emit("session_start", ctx);
 			expect(branch.some(entry => entry.type === "custom" && entry.customType === "om.data-policy")).toBe(true);
 			expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("om: observer"), "info");
-			await handlers.get("agent_start")({}, ctx);
+			await emit("agent_start", ctx);
 			await vi.waitFor(() => expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("observer failed"), "error"));
 			expect(spawn).toHaveBeenCalledTimes(1);
 			await commands.get("om:status").handler("", ctx);
 			expect(ui.notify).toHaveBeenCalledWith(expect.stringContaining("session cost: $0.2500 (1 run)"), "info");
 			for (const arg of ["off", "on", "", ""]) await commands.get("om").handler(arg, ctx);
-			await handlers.get("session_before_tree")({}, ctx);
-			await handlers.get("session_tree")({}, ctx);
+			await emit("session_before_tree", ctx);
+			await emit("session_tree", ctx);
 			await commands.get("om:status").handler("", ctx);
 			expect(ui.notify.mock.calls.at(-1)?.[0]).toContain("om status");
 			expect(branch.filter(entry => entry.type === "custom" && entry.customType === OM_ENABLED).map(entry => entry.data)).toEqual([
@@ -83,7 +86,7 @@ describe("per-session gate", () => {
 				expect(ui.setWidget).toHaveBeenCalledWith("om-workers", expect.any(Function));
 			}
 		} finally {
-			await handlers.get("session_shutdown")?.();
+			await emit("session_shutdown");
 			vi.restoreAllMocks(); vi.unstubAllEnvs();
 			rmSync(root, { recursive: true, force: true });
 		}
