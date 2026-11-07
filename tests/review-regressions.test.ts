@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -34,7 +34,7 @@ it.each(["valid", "missing", "changed", "other-scope", "other-session"])("produc
  ] });
  vi.spyOn(launch, "spawnWorker").mockImplementation(async opts => {
   const tools = new Map<string, any>();
-  registerConsolidatorTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, opts.env.OM_MEMORY_DIR!, opts.env.OM_RESULT_PATH);
+  registerConsolidatorTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, opts.env.OM_MEMORY_DIR!, opts.env.OM_RESULT_PATH, new Set(JSON.parse(readFileSync(opts.env.OM_BATCH_IDS_PATH!, "utf8"))));
   await tools.get("write").execute("w", { path: "topic.md", content: "OLD_OBSERVATION" });
   await tools.get("report_consolidation").execute("r", { receipts: [{ timestamp: "T", path: "topic.md", quote: "OLD_OBSERVATION" }] });
   return { code: 0, signal: null, stderr: "" };

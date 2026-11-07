@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -57,6 +57,8 @@ try {
  process.env.OM_WORKER = "consolidator";
  process.env.OM_MEMORY_DIR = join(fixture, "staging");
  process.env.OM_RESULT_PATH = join(fixture, "receipt.json");
+ process.env.OM_BATCH_IDS_PATH = join(fixture, "batch-ids.json");
+ writeFileSync(process.env.OM_BATCH_IDS_PATH, JSON.stringify(["2026-11-07T13:55:00", "N"]));
  mkdirSync(process.env.OM_MEMORY_DIR);
  const worker = await loadExtensions([join(source, "agent/index.ts")], fixture);
  check(worker.errors, []);
@@ -64,7 +66,9 @@ try {
  const tools = workerRunner.getAllRegisteredTools();
  const tool = name => tools.find(t => t.definition.name === name).definition;
  await tool("write").execute("w", { path: "topic.md", content: "Retained evidence" });
- await tool("report_consolidation").execute("r", { receipts: [{ timestamp: "T", path: "topic.md", quote: "Retained evidence" }, { timestamp: "N", discardReason: "Repeated greeting" }] });
+ await assert.rejects(tool("report_consolidation").execute("bad", { receipts: [{ timestamp: "2026-11-07T13:55:00.01", path: "topic.md", quote: "Retained evidence" }] }), /2026-11-07T13:55:00\.01/); checks++;
+ check(existsSync(process.env.OM_RESULT_PATH), false);
+ await tool("report_consolidation").execute("r", { receipts: [{ timestamp: "2026-11-07T13:55:00", path: "topic.md", quote: "Retained evidence" }, { timestamp: "N", discardReason: "Repeated greeting" }] });
  const receipts = JSON.parse(readFileSync(process.env.OM_RESULT_PATH, "utf8")).receipts;
  check(receipts.length, 2); assert.match(receipts[0].sha256, /^[a-f0-9]{64}$/); checks++;
  const payload = await workerRunner.emitBeforeProviderRequest({ messages: [{ content: "Authorization: Bearer synthetic-secret" }] });

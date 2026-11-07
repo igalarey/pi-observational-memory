@@ -114,11 +114,13 @@ async function dispatchConsolidator(
 	const token = runtime.captureToken();
 	const memoryRoot = runtime.memoryRoot;
 	let staging: string | undefined;
+	const batchIdsPath = join(runsDir(memoryRoot), `${runId}.batch-ids.json`);
 	runtime.status.workerStart("consolidator", runId);
 
 	try {
 		assertNoSymlinks(runsDir(memoryRoot));
 		mkdirSync(runsDir(memoryRoot), { recursive: true, mode: 0o700 });
+		atomicWrite(batchIdsPath, JSON.stringify(promote.map(o => o.timestamp)));
 		staging = mkdtempSync(join(runsDir(memoryRoot), `${runId}.stage-`));
 		for (const name of readdirSync(memoryRoot)) {
 			if (/^[\w-]+\.md$/.test(name)) atomicWrite(join(staging, name), safeRead(join(memoryRoot, name)));
@@ -130,6 +132,7 @@ async function dispatchConsolidator(
 		});
 		const env = buildWorkerEnv("consolidator", { memoryRoot, runId });
 		env.OM_MEMORY_DIR = staging;
+		env.OM_BATCH_IDS_PATH = batchIdsPath;
 		const exit = await spawnWorker({ argv, cwd: staging, env, input: prompt, signal: controller.signal });
 		if (controller.signal.aborted || !runtime.isCurrent(token)) return;
 		// Capture cost before the exit-code check so a partial run's spend is still recorded.
@@ -179,6 +182,12 @@ async function dispatchConsolidator(
 	} finally {
 		try { if (staging && existsSync(staging)) rmSync(staging, { recursive: true, force: true }); } catch {
 			if (runtime.isCurrent(token)) runtime.lastWorkerError = "Could not remove worker staging directory";
+		}
+		try {
+			assertNoSymlinks(runsDir(memoryRoot));
+			rmSync(batchIdsPath, { force: true });
+		} catch {
+			if (runtime.isCurrent(token)) runtime.lastWorkerError = "Could not remove worker batch ID manifest";
 		}
 		if (runtime.consolidatorController === controller) {
 			runtime.consolidatorController = undefined;

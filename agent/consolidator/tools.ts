@@ -72,9 +72,11 @@ function listFilesRecursive(dir: string): string[] {
 }
 
 /** Register the consolidator's scoped file tools (read/write/edit/ls/grep), all under .memory/. */
-export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string, resultPath?: string): void {
+export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string, resultPath?: string, allowedIds?: ReadonlySet<string>): void {
 	const root = resolve(memoryRoot);
 	if (resultPath) {
+		if (!allowedIds) throw new Error("Missing allowed batch IDs for report_consolidation");
+		const handed = new Set(allowedIds);
 		pi.registerTool({
 			name: "report_consolidation",
 			label: "Report consolidation",
@@ -83,6 +85,10 @@ export function registerConsolidatorTools(pi: ExtensionAPI, memoryRoot: string, 
 				timestamp: Type.String(), path: Type.Optional(Type.String()), quote: Type.Optional(Type.String()), discardReason: Type.Optional(Type.String()),
 			})) }),
 			async execute(_id, params) {
+				const invalid = params.receipts.filter(receipt => !handed.has(receipt.timestamp)).map(receipt => receipt.timestamp);
+				if (invalid.length > 0) {
+					throw new Error(`Receipt IDs outside handed batch: ${JSON.stringify(invalid)}. Copy exact IDs from supplied observations and retry report_consolidation.`);
+				}
 				const receipts = params.receipts.map(receipt => {
 					if (!receipt.path) return receipt;
 					const path = scoped(root, receipt.path);

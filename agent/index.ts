@@ -16,6 +16,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { trackWorkerCost } from "./cost.js";
 import { redactPayload } from "../src/privacy.js";
+import { safeRead } from "../src/memory/paths.js";
 import { CONSOLIDATOR_SYSTEM } from "./consolidator/prompt.js";
 import { registerConsolidatorTools } from "./consolidator/tools.js";
 import { OBSERVER_SYSTEM } from "./observer/prompt.js";
@@ -49,7 +50,14 @@ export default function omWorker(pi: ExtensionAPI): void {
 		const memoryRoot = process.env.OM_MEMORY_DIR;
 		if (!memoryRoot) throw new Error("OM_MEMORY_DIR not set for consolidator worker");
 		if (!resultPath) throw new Error("OM_RESULT_PATH not set for consolidator worker");
-		registerConsolidatorTools(pi, memoryRoot, resultPath);
+		const batchIdsPath = process.env.OM_BATCH_IDS_PATH;
+		if (!batchIdsPath) throw new Error("OM_BATCH_IDS_PATH not set for consolidator worker");
+		let batchIds: unknown;
+		try { batchIds = JSON.parse(safeRead(batchIdsPath)); } catch { throw new Error("Missing or invalid consolidation batch ID manifest"); }
+		if (!Array.isArray(batchIds) || !batchIds.every(id => typeof id === "string" && id.length > 0)) {
+			throw new Error("Invalid consolidation batch ID manifest");
+		}
+		registerConsolidatorTools(pi, memoryRoot, resultPath, new Set(batchIds));
 
 		pi.on("before_agent_start", async () => {
 			return { systemPrompt: CONSOLIDATOR_SYSTEM };

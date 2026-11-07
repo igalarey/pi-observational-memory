@@ -95,7 +95,7 @@ it.each([false, true])("only verified receipts permit publication and tombstones
  h.branch.push(observationsRecordedEntry("obs", { observations: [observation("T", { tokenCount: 100 }), observation("Z", { tokenCount: 100 })], coversUpToId: "a" }));
  vi.spyOn(launch, "spawnWorker").mockImplementation(async opts => {
   const tools = new Map<string, any>();
-  (registerConsolidatorTools as any)({ registerTool: (tool: any) => tools.set(tool.name, tool) }, opts.env.OM_MEMORY_DIR, opts.env.OM_RESULT_PATH);
+  (registerConsolidatorTools as any)({ registerTool: (tool: any) => tools.set(tool.name, tool) }, opts.env.OM_MEMORY_DIR, opts.env.OM_RESULT_PATH, new Set(JSON.parse(readFileSync(opts.env.OM_BATCH_IDS_PATH!, "utf8"))));
   await tools.get("write").execute("write", { path: "topic.md", content: "Retained fact" });
   expect(existsSync(join(root, "topic.md"))).toBe(false);
   await tools.get("report_consolidation").execute("receipt", { receipts: [{ timestamp: "T", path: "topic.md", quote: "Retained fact" }] });
