@@ -36,7 +36,7 @@ export default function observationalMemory(pi: ExtensionAPI): void {
 	const runtime = new Runtime();
 
 	function attachIfEnabled(ctx: any): void {
-		if (runtime.enabled && ctx.mode === "tui" && ctx.hasUI && ctx.ui) {
+		if (runtime.enabled && runtime.config.showStatus && ctx.mode === "tui" && ctx.hasUI && ctx.ui) {
 			runtime.status.attach(ctx.ui);
 		} else {
 			runtime.status.detach();

@@ -41,6 +41,7 @@ export interface Config {
 	resumeAfterMidRunCompaction: boolean;
 	/** Power-user setting: disable all triggers (distinct from the on/off gate). */
 	passive: boolean;
+	showStatus: boolean;
 	/** Emit the NDJSON debug log. */
 	debugLog: boolean;
 }
@@ -60,6 +61,7 @@ export const DEFAULTS: Config = {
 		consolidator: { provider: "openrouter", id: "z-ai/glm-5.3", thinking: "medium" },
 	},
 	passive: false,
+	showStatus: true,
 	debugLog: false,
 };
 
@@ -115,6 +117,7 @@ function normalizeSettingsConfig(value: Record<string, unknown>, base: Config): 
 	if (typeof value.resumeAfterMidRunCompaction === "boolean")
 		normalized.resumeAfterMidRunCompaction = value.resumeAfterMidRunCompaction;
 	if (typeof value.passive === "boolean") normalized.passive = value.passive;
+	if (typeof value.showStatus === "boolean") normalized.showStatus = value.showStatus;
 	if (typeof value.debugLog === "boolean") normalized.debugLog = value.debugLog;
 	if (isRecord(value.models)) {
 		normalized.models = {

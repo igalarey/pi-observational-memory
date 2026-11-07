@@ -104,6 +104,7 @@ Use the `observational-memory` namespace in global Pi settings or a trusted proj
     "tailTokens": 20000,
     "journeyTargetTokens": 1000,
     "observerConcurrency": 4,
+    "showStatus": true,
     "models": {
       "observer": { "provider": "openai-codex", "id": "gpt-6-luna", "thinking": "high" },
       "consolidator": { "provider": "openai-codex", "id": "gpt-6-luna", "thinking": "high" }
@@ -114,6 +115,8 @@ Use the `observational-memory` namespace in global Pi settings or a trusted proj
 ```
 
 No configuration migration is required. This example does not change the package defaults: without explicit model settings, both roles still use `openrouter/z-ai/glm-5.3`. `PI_OM_PASSIVE=1` disables automatic triggers. `chunkOverlapTokens` remains zero in this implementation. Worker deadlines and retention limits are currently code constants, not new settings.
+
+`showStatus` defaults to `true` and accepts only boolean values. Set `showStatus` to `false` to hide the `om` footer and `om-workers` widget. Memory capture, workers, costs, compaction, `/om:status`, and notifications remain unchanged.
 
 Cost reporting uses Pi usage metrics. Costs from invalidated workers are not appended to another branch, so displayed totals can undercount cancelled work. There is no monetary budget cap.
 

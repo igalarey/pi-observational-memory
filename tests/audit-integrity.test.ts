@@ -141,6 +141,27 @@ it("untrusted project models are ignored and trusted overrides inherit global fi
  expect(runtime.config.models).toEqual(models);
  expect(loadConfig(root, {}, { allowProjectConfig: true }).models).toEqual({ ...models, observer: { ...models.observer, id: "override" } });
 });
+it.each([true, false])("accepts boolean showStatus=%s with a visible default", (showStatus) => {
+ const agent = join(root, "agent"); mkdirSync(agent);
+ vi.stubEnv("PI_CODING_AGENT_DIR", agent);
+ expect(loadConfig(root, {})).toHaveProperty("showStatus", true);
+ writeFileSync(join(agent, "settings.json"), JSON.stringify({ "observational-memory": { showStatus } }));
+ expect(loadConfig(root, {})).toHaveProperty("showStatus", showStatus);
+ mkdirSync(join(root, ".pi"));
+ writeFileSync(join(root, ".pi/settings.json"), JSON.stringify({ "observational-memory": { showStatus: !showStatus } }));
+ expect(loadConfig(root, {})).toHaveProperty("showStatus", showStatus);
+ expect(loadConfig(root, {}, { allowProjectConfig: true })).toHaveProperty("showStatus", !showStatus);
+});
+it.each([undefined, null, "false", "true", 0, 1, [], {}])("ignores non-boolean showStatus=%j without losing the inherited value", (showStatus) => {
+ const agent = join(root, "agent"); mkdirSync(agent);
+ vi.stubEnv("PI_CODING_AGENT_DIR", agent);
+ writeFileSync(join(agent, "settings.json"), JSON.stringify({ "observational-memory": { showStatus } }));
+ expect(loadConfig(root, {})).toHaveProperty("showStatus", true);
+ writeFileSync(join(agent, "settings.json"), JSON.stringify({ "observational-memory": { showStatus: false } }));
+ mkdirSync(join(root, ".pi"));
+ writeFileSync(join(root, ".pi/settings.json"), JSON.stringify({ "observational-memory": { showStatus } }));
+ expect(loadConfig(root, {}, { allowProjectConfig: true })).toHaveProperty("showStatus", false);
+});
 it("rejects symlink components for every scoped operation and recursive grep", async () => {
  const memory = join(root, "memory"), outside = join(root, "outside"); mkdirSync(memory); mkdirSync(outside);
  writeFileSync(join(outside, "canary.md"), "CANARY"); symlinkSync(outside, join(memory, "bridge"));
