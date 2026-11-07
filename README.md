@@ -74,7 +74,9 @@ Only one consolidator runs per runtime. It edits a private staging directory, no
 
 The tool adds SHA-256 hashes. Each report replaces the preceding report. Persisted receipts require an exact quote in a flat Markdown filename. `INDEX.md` is reserved. An explicit discard requires a nonempty reason and no file fields.
 
-The orchestrator verifies receipts against the handed batch and staged files. It publishes only referenced files, verifies them again, writes provenance and the index, then appends tombstones with `sessionId` and `scopeId`. These additive fields bind compaction-time receipt checks to the publishing scope. Exit zero and prose confirmation are not receipts. Unknown timestamps, changed files, missing receipts, cancellation, and stale lifecycle tokens cannot authorize tombstones.
+The worker rejects receipt timestamps outside the handed batch before it writes a result. Its error asks for exact IDs from the supplied observations so the consolidator can retry.
+
+The orchestrator independently verifies receipts against the handed batch and staged files. It publishes only referenced files, verifies them again, writes provenance and the index, then appends tombstones with `sessionId` and `scopeId`. These additive fields bind compaction-time receipt checks to the publishing scope. Exit zero and prose confirmation are not receipts. Unknown timestamps, changed files, missing receipts, cancellation, and stale lifecycle tokens cannot authorize tombstones.
 
 Publication uses atomic replacement per file, not a multi-file transaction. If publication fails partway, some files can change, but the observations remain available and no batch tombstone is appended. Receipts prove persistence of quoted text, not semantic completeness of a model summary.
 
